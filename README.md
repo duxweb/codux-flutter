@@ -1,55 +1,170 @@
-# Codux Flutter
+# Codux Mobile
 
-Codux Mobile 的 Flutter 重构版，复刻当前 React Native 版的远程终端工作台结构，并使用 `xterm.dart` 原生 Flutter 终端渲染。
+<p align="center">
+  <strong>A native mobile companion for the Codux macOS terminal workspace.</strong>
+</p>
 
-## 技术栈
+<p align="center">
+  <a href="https://github.com/duxweb/codux">Codux for macOS</a> &middot;
+  <a href="https://github.com/duxweb/codux-flutter/releases">Download</a> &middot;
+  <a href="https://github.com/duxweb/codux-flutter/issues">Feedback</a>
+</p>
 
-- Flutter 3.41+
-- `xterm` / `xterm.dart`：终端渲染与输入
-- `web_socket_channel`：连接 Codux Go relay server
-- `mobile_scanner`：扫码配对
-- `shared_preferences`：本地设备与设置存储
-- `device_info_plus`：默认读取手机设备名
+<p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-## 功能范围
+---
 
-- Mac 端二维码配对，支持粘贴二维码 JSON
-- 本地保存多台电脑设备
-- WebSocket 连接 relay server
-- 项目列表、分屏列表、创建/关闭/切换终端
-- 远程 PTY 输入输出、resize 同步
-- 顶部连接状态、横向项目栏、终端主体、底部快捷工具栏
-- 设置页：服务器地址、本机名称
-- 终端遮罩过渡层：用于键盘高度变化时遮住重排断层
+> Screenshot placeholders are reserved under `docs/images/`. Add release screenshots after the first public APK build is verified on device.
 
-## 运行
+## Why Codux Mobile?
+
+Codux on macOS owns the real projects, terminals, AI tool sessions, and relay pairing flow. Codux Mobile is the phone-side client that connects to that workspace and gives you a touch-first remote terminal without forcing the macOS terminal UI to resize.
+
+The mobile client focuses on three things:
+
+- **Reliable terminal rendering on Android** — uses a native Flutter platform view backed by Termux `TerminalView` / `TerminalEmulator`, not WebView or xterm.js.
+- **Mobile-safe input** — quick-key toolbar, IME toggle, text selection, scrollback, paste, image upload, and keyboard avoidance tuned for terminal TUI apps.
+- **Codux workspace integration** — QR pairing, device list, project tabs, terminal split list, file browser, and AI usage panels all connect to the Codux macOS host through the relay service.
+
+## Features
+
+| Area | Status | Description |
+|:--|:--|:--|
+| Pairing | Ready | Scan the QR code shown by Codux on macOS, submit a pairing request, and wait for host confirmation. |
+| Device Management | Ready | Save multiple Mac devices locally, edit relay address / display name, and reconnect in the background. |
+| Remote Terminal | Ready | Render remote PTY output through the native Android terminal plugin and send explicit user input back to the Mac host. |
+| Keyboard Handling | Ready | Keeps terminal height stable while shifting the surface around the Android IME, avoiding TUI redraw corruption. |
+| Quick Keys | Ready | Two-row terminal toolbar with Esc, Tab, Copy, Paste, Upload, arrows, Delete, Enter, Ctrl, Shift, Alt, keyboard toggle, and `^C`. |
+| Files | Ready | Browse project files, remember per-project path, open/edit files, rename, copy path, and delete through the Mac host. |
+| AI Stats | Ready | Shows current project and recent AI usage data forwarded by the Codux host. |
+| Updates | Ready | Checks the latest GitHub Release for `duxweb/codux-flutter`. |
+
+## Architecture
+
+```text
+Codux Mobile (Flutter)
+  ├─ UI shell: device list, project tabs, file panel, stats, toolbar
+  ├─ Native terminal plugin: Flutter PlatformView + Termux TerminalView
+  └─ Relay client: WebSocket messages to Codux relay
+
+Codux macOS host
+  ├─ Owns projects, terminal sessions, PTYs, files, and AI usage state
+  └─ Confirms mobile pairing and forwards terminal/file/stat events
+```
+
+The mobile app does not try to become the source of truth for terminal sessions. It renders and interacts with the host-owned workspace through explicit relay protocol messages.
+
+## Requirements
+
+- Flutter stable with Dart `^3.11.5`
+- Android SDK 36
+- JDK 17
+- Android 8.0 / API 26 or later
+- A running Codux macOS host and relay pairing code
+
+## Development
 
 ```bash
 cd /Volumes/Web/codux-flutter
+flutter pub get
 flutter run
 ```
 
-## 验证
+### Validation
 
 ```bash
 flutter analyze
 flutter test
 flutter build apk --debug
+flutter build apk --release
 ```
 
-Android debug APK 输出：
+Debug APK:
 
 ```text
 build/app/outputs/flutter-apk/app-debug.apk
 ```
 
-## 环境说明
+Release APK:
 
-本机已安装：
+```text
+build/app/outputs/flutter-apk/app-release.apk
+```
 
-- Flutter stable 3.41.7
-- Android command line tools
-- Android SDK 36
-- OpenJDK 17，并通过 `flutter config --jdk-dir` 配置给 Flutter
+## Logging
 
-当前 `flutter doctor` 仅剩 iOS Simulator runtime 检查问题，Android toolchain 已通过。
+Flutter and the native terminal plugin share the same build-time log level:
+
+```bash
+flutter run --dart-define=CODUX_LOG_LEVEL=debug
+flutter build apk --release --dart-define=CODUX_LOG_LEVEL=warn
+```
+
+Supported levels:
+
+- `debug`
+- `info`
+- `warn`
+- `error`
+- `off`
+
+The default is `warn`. Release workflows build with `warn` unless overridden.
+
+## Release
+
+This repository includes the same release shape as the macOS app:
+
+- `CHANGELOG.md` and `CHANGELOG.zh-CN.md` keep versioned release notes.
+- `scripts/release/build-release-notes.sh` extracts bilingual release notes for GitHub Releases.
+- `.github/workflows/test-build.yml` creates manual debug / release APK artifacts.
+- `.github/workflows/release-build.yml` builds on `v*` tags and publishes GitHub Release assets.
+
+### Android Signing
+
+Published releases require these repository secrets:
+
+- `CODUX_ANDROID_KEYSTORE_BASE64`
+- `CODUX_ANDROID_KEYSTORE_PASSWORD`
+- `CODUX_ANDROID_KEY_ALIAS`
+- `CODUX_ANDROID_KEY_PASSWORD`
+
+Generate the base64 value from a keystore:
+
+```bash
+base64 -i codux-release.jks | pbcopy
+```
+
+For local development without `android/key.properties`, release builds fall back to debug signing so `flutter run --release` still works. GitHub published releases require the signing secrets.
+
+### Publish A Version
+
+1. Add notes under the target version in `CHANGELOG.md` and `CHANGELOG.zh-CN.md`.
+2. Update `pubspec.yaml` version if needed.
+3. Commit the release changes.
+4. Tag and push:
+
+```bash
+git tag v1.0.0
+git push origin main
+git push origin v1.0.0
+```
+
+The release workflow builds `Codux-Mobile-<version>-android.apk`, generates `SHA256SUMS.txt`, extracts release notes, and uploads the assets to GitHub Releases.
+
+## Repository Layout
+
+| Path | Description |
+|:--|:--|
+| `lib/` | Flutter app shell, relay client, screens, widgets, themes, and i18n. |
+| `plugin/codux_native_terminal/` | Native Android terminal plugin used by the Flutter app. |
+| `android/` | Android application wrapper and release signing config. |
+| `.github/workflows/` | Manual test builds and tag-triggered release builds. |
+| `scripts/release/` | Release note extraction helpers. |
+| `docs/images/` | Reserved screenshot location. |
+
+## Related Projects
+
+- [Codux for macOS](https://github.com/duxweb/codux)
+- [Codux Mobile Releases](https://github.com/duxweb/codux-flutter/releases)

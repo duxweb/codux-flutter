@@ -1,0 +1,128 @@
+name: Test Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "App version, for example 1.0.0"
+        required: true
+      package_version:
+        description: "Artifact label, for example 1.0.0-test-20260428"
+        required: false
+      build_number:
+        description: "Build number override"
+        required: false
+      configuration:
+        description: "Flutter build mode"
+        required: false
+        default: Debug
+        type: choice
+        options:
+          - Debug
+          - Release
+      log_level:
+        description: "CODUX_LOG_LEVEL"
+        required: false
+        default: debug
+        type: choice
+        options:
+          - debug
+          - info
+          - warn
+          - error
+          - off
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    concurrency:
+      group: mobile-test-build-${{ github.ref_name }}-${{ github.run_id }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve build metadata
+        id: meta
+        shell: bash
+        run: |
+          version="${{ github.event.inputs.version }}"
+          package_version="${{ github.event.inputs.package_version }}"
+          build_number="${{ github.event.inputs.build_number }}"
+          configuration="${{ github.event.inputs.configuration }}"
+
+          if [[ -z "${version}" ]]; then
+            echo "Build version is missing" >&2
+            exit 1
+          fi
+
+          if [[ -z "${build_number}" ]]; then
+            build_number="${GITHUB_RUN_NUMBER}"
+          fi
+
+          if [[ -z "${package_version}" ]]; then
+            date_suffix="$(date +%Y%m%d)"
+            if [[ "${configuration}" == "Debug" ]]; then
+              package_version="${version}-debug-${date_suffix}"
+            else
+              package_version="${version}-test-${date_suffix}"
+            fi
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "package_version=${package_version}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${build_number}" >> "$GITHUB_OUTPUT"
+          echo "configuration=${configuration}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build APK
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [[ "${{ steps.meta.outputs.configuration }}" == "Debug" ]]; then
+            flutter build apk --debug \
+              --build-name "${{ steps.meta.outputs.version }}" \
+              --build-number "${{ steps.meta.outputs.build_number }}" \
+              --dart-define "CODUX_LOG_LEVEL=${{ github.event.inputs.log_level }}"
+            cp build/app/outputs/flutter-apk/app-debug.apk "dist/Codux-Mobile-${{ steps.meta.outputs.package_version }}-android-debug.apk"
+          else
+            flutter build apk --release \
+              --build-name "${{ steps.meta.outputs.version }}" \
+              --build-number "${{ steps.meta.outputs.build_number }}" \
+              --dart-define "CODUX_LOG_LEVEL=${{ github.event.inputs.log_level }}"
+            cp build/app/outputs/flutter-apk/app-release.apk "dist/Codux-Mobile-${{ steps.meta.outputs.package_version }}-android-release.apk"
+          fi
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codux-mobile-${{ steps.meta.outputs.package_version }}-manual
+          path: |
+            dist/*.apk
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

@@ -1,0 +1,160 @@
+name: Release Build
+run-name: >-
+  ${{
+    github.event_name == 'push'
+    && format('Mobile Release {0}', github.ref_name)
+    || format('Mobile Release v{0}', github.event.inputs.version)
+  }}
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, for example 1.0.0"
+        required: true
+      publish_release:
+        description: "Publish GitHub Release assets after build"
+        required: false
+        default: false
+        type: boolean
+      log_level:
+        description: "CODUX_LOG_LEVEL"
+        required: false
+        default: warn
+        type: choice
+        options:
+          - debug
+          - info
+          - warn
+          - error
+          - off
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    concurrency:
+      group: mobile-release-${{ github.ref_name || github.run_id }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve build metadata
+        id: meta
+        shell: bash
+        run: |
+          version="${{ github.event.inputs.version }}"
+          if [[ -z "${version}" ]]; then
+            version="${GITHUB_REF_NAME}"
+            version="${version#v}"
+          fi
+          if [[ -z "${version}" ]]; then
+            echo "Release version is missing" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release notes
+        id: notes
+        shell: bash
+        run: |
+          notes_path="$RUNNER_TEMP/release-notes.md"
+          bash scripts/release/build-release-notes.sh "${{ steps.meta.outputs.version }}" "$notes_path" CHANGELOG.md CHANGELOG.zh-CN.md
+          echo "path=${notes_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate signing secrets
+        if: github.event_name == 'push' || github.event.inputs.publish_release == 'true'
+        shell: bash
+        env:
+          CODUX_ANDROID_KEYSTORE_BASE64: ${{ secrets.CODUX_ANDROID_KEYSTORE_BASE64 }}
+          CODUX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CODUX_ANDROID_KEYSTORE_PASSWORD }}
+          CODUX_ANDROID_KEY_ALIAS: ${{ secrets.CODUX_ANDROID_KEY_ALIAS }}
+          CODUX_ANDROID_KEY_PASSWORD: ${{ secrets.CODUX_ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -z "${CODUX_ANDROID_KEYSTORE_BASE64:-}" || -z "${CODUX_ANDROID_KEYSTORE_PASSWORD:-}" || -z "${CODUX_ANDROID_KEY_ALIAS:-}" || -z "${CODUX_ANDROID_KEY_PASSWORD:-}" ]]; then
+            echo "Android release signing secrets are required for published releases" >&2
+            echo "Required secrets: CODUX_ANDROID_KEYSTORE_BASE64, CODUX_ANDROID_KEYSTORE_PASSWORD, CODUX_ANDROID_KEY_ALIAS, CODUX_ANDROID_KEY_PASSWORD" >&2
+            exit 1
+          fi
+
+      - name: Configure Android signing
+        shell: bash
+        env:
+          CODUX_ANDROID_KEYSTORE_BASE64: ${{ secrets.CODUX_ANDROID_KEYSTORE_BASE64 }}
+          CODUX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CODUX_ANDROID_KEYSTORE_PASSWORD }}
+          CODUX_ANDROID_KEY_ALIAS: ${{ secrets.CODUX_ANDROID_KEY_ALIAS }}
+          CODUX_ANDROID_KEY_PASSWORD: ${{ secrets.CODUX_ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -z "${CODUX_ANDROID_KEYSTORE_BASE64:-}" ]]; then
+            echo "[release] Android signing secrets not configured, using local debug signing fallback"
+            exit 0
+          fi
+          keystore_path="$PWD/android/app/codux-release.jks"
+          printf '%s' "$CODUX_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          {
+            echo "storeFile=app/codux-release.jks"
+            echo "storePassword=$CODUX_ANDROID_KEYSTORE_PASSWORD"
+            echo "keyAlias=$CODUX_ANDROID_KEY_ALIAS"
+            echo "keyPassword=$CODUX_ANDROID_KEY_PASSWORD"
+          } > android/key.properties
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release APK
+        shell: bash
+        run: |
+          rm -rf dist
+          mkdir -p dist
+          flutter build apk --release \
+            --build-name "${{ steps.meta.outputs.version }}" \
+            --build-number "${{ steps.meta.outputs.build_number }}" \
+            --dart-define "CODUX_LOG_LEVEL=${{ github.event.inputs.log_level || 'warn' }}"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/Codux-Mobile-${{ steps.meta.outputs.version }}-android.apk"
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codux-mobile-${{ steps.meta.outputs.version }}-android
+          path: |
+            dist/Codux-Mobile-${{ steps.meta.outputs.version }}-android.apk
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Upload release assets
+        if: github.event_name == 'push' || github.event.inputs.publish_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.meta.outputs.version }}
+          name: Codux Mobile v${{ steps.meta.outputs.version }}
+          body_path: ${{ steps.notes.outputs.path }}
+          files: |
+            dist/Codux-Mobile-${{ steps.meta.outputs.version }}-android.apk
+            dist/SHA256SUMS.txt
