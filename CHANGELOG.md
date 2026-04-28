@@ -4,6 +4,17 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-28
+
+### Added
+
+- Added a terminal history loading state so the terminal screen no longer appears as an empty cursor-only view while the remote buffer is being restored.
+
+### Fixed
+
+- Retried `terminal.buffer` requests when the remote history buffer is not acknowledged, improving recovery after relay reconnects or transient dropped messages.
+- Added regression coverage for terminal buffer retry, acknowledgement, and readiness behavior.
+
 ## [0.1.0] - 2026-04-28
 
 ### Added

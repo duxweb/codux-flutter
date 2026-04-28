@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/duxweb/codux-flutter/releases">
-    <img src="https://img.shields.io/badge/版本-0.1.0-22d3ee?style=flat-square" alt="版本">
+    <img src="https://img.shields.io/badge/版本-0.1.1-22d3ee?style=flat-square" alt="版本">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/协议-GPLv3-blue?style=flat-square" alt="开源协议">
@@ -163,9 +163,9 @@ base64 -i codux-release.jks | pbcopy
 4. 打 tag 并推送：
 
 ```bash
-git tag v0.1.0
+git tag v0.1.1
 git push origin main
-git push origin v0.1.0
+git push origin v0.1.1
 ```
 
 发布 workflow 会构建 `Codux-Mobile-<version>-android.apk`，生成 `SHA256SUMS.txt`，提取双语更新记录，并上传到 GitHub Releases。

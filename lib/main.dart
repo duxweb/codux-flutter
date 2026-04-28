@@ -18,6 +18,7 @@ import 'services/e2e_crypto.dart';
 import 'services/log_service.dart';
 import 'services/relay_service.dart';
 import 'services/storage_service.dart';
+import 'services/terminal_buffer_retry.dart';
 import 'theme/app_theme.dart';
 import 'widgets/ai_stats_panel.dart';
 import 'widgets/app_toast.dart';
@@ -124,6 +125,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   late final AnimationController _maskController;
   late final Animation<double> _maskOpacity;
+  late final TerminalBufferRetryCoordinator _terminalBufferRetry;
   CoduxNativeTerminalController? _nativeTerminalController;
   String _pendingTerminalOutput = '';
   double _terminalCursorBottom = 0;
@@ -154,6 +156,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   String? _pairingError;
   bool _showTerminal = false;
   bool _terminalReady = false;
+  bool _terminalBufferLoading = false;
   bool _terminalListLoaded = false;
   bool _backgroundConnect = false;
   bool _shouldReconnect = true;
@@ -183,7 +186,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   bool _fileEditorEditing = false;
   bool _fileEditorEditable = true;
   int _reconnectAttempt = 0;
-  String _lastBufferedSessionId = '';
 
   WebSocketSinkLike? _socket;
   int _sendSeq = 0;
@@ -218,6 +220,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       parent: _maskController,
       curve: Curves.easeOutCubic,
     );
+    _terminalBufferRetry = TerminalBufferRetryCoordinator(
+      onRetryExhausted: (sessionId) {
+        if (!mounted || _sessionId != sessionId) return;
+        setState(() => _terminalBufferLoading = false);
+      },
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
@@ -228,6 +236,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _healthTimer?.cancel();
     _toastTimer?.cancel();
     _filePickerTimeoutTimer?.cancel();
+    _terminalBufferRetry.dispose();
     _socketSubscription?.cancel();
     _socket?.close();
     _nativeTerminalController?.dispose();
@@ -458,7 +467,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _terminalListLoaded = false;
         _selectedProjectId = null;
         _sessionId = null;
-        _lastBufferedSessionId = '';
+        _terminalBufferRetry.reset();
+        _terminalBufferLoading = false;
         _ownedTerminalIds.clear();
       }
       _activeDevice = target;
@@ -536,7 +546,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   void _sendInitialRelayRequests({bool force = false}) {
     if (force) {
-      _lastBufferedSessionId = '';
+      _terminalBufferRetry.reset();
     }
     _send(const RelayEnvelope(type: 'host.info'));
     final target = _activeDevice;
@@ -715,12 +725,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                       item.id == _sessionId && _isOwnedByCurrentDevice(item),
                 )) {
               _sessionId = null;
-              _lastBufferedSessionId = '';
+              _terminalBufferRetry.reset();
+              _terminalBufferLoading = false;
             }
           });
           _ensureTerminalForSelectedProject();
           if (_showTerminal && _sessionId != null) {
-            _lastBufferedSessionId = '';
             _requestBufferIfReady();
           }
         case 'terminal.created':
@@ -739,7 +749,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               _sessionId = terminal.id;
               _selectedProjectId = terminal.projectId;
               _creatingTerminalProjectId = null;
-              _lastBufferedSessionId = '';
+              _terminalBufferRetry.reset();
+              _terminalBufferLoading = true;
             });
             _clearTerminal();
             _flushPendingTerminalResize(force: true);
@@ -758,7 +769,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             }
             if (closedActiveSession) {
               _sessionId = null;
-              _lastBufferedSessionId = '';
+              _terminalBufferRetry.reset();
+              _terminalBufferLoading = false;
               _terminalCursorBottom = 0;
             }
             _creatingTerminalProjectId = null;
@@ -778,7 +790,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             CoduxLog.debug(
               '[codux-flutter-output] bytes=${raw.codeUnits.length} buffer=$isBuffer session=${message.sessionId ?? ''} data=${_debugTerminalSnippet(raw)}',
             );
-            if (isBuffer) _clearTerminal();
+            if (isBuffer) {
+              _markTerminalBufferReceived(message.sessionId);
+              _clearTerminal();
+            } else if (raw.isNotEmpty && _terminalBufferLoading) {
+              setState(() => _terminalBufferLoading = false);
+            }
             if (raw.isNotEmpty) {
               _writeTerminalData(raw, replayingBuffer: isBuffer);
             }
@@ -907,14 +924,26 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _requestBufferIfReady({bool force = false}) {
-    final id = _sessionId;
-    if (!_terminalReady ||
-        id == null ||
-        (!force && _lastBufferedSessionId == id)) {
-      return;
+    final sent = _terminalBufferRetry.requestIfReady(
+      terminalReady: _terminalReady,
+      sessionId: _sessionId,
+      force: force,
+      send: (sessionId) =>
+          _send(RelayEnvelope(type: 'terminal.buffer', sessionId: sessionId)),
+    );
+    if (sent && !_terminalBufferLoading && mounted) {
+      setState(() => _terminalBufferLoading = true);
     }
-    _lastBufferedSessionId = id;
-    _send(RelayEnvelope(type: 'terminal.buffer', sessionId: id));
+  }
+
+  void _markTerminalBufferReceived(String? sessionId) {
+    _terminalBufferRetry.markReceived(
+      sessionId: sessionId,
+      activeSessionId: _sessionId,
+    );
+    if (_terminalBufferLoading && mounted) {
+      setState(() => _terminalBufferLoading = false);
+    }
   }
 
   void _clearTerminal() {
@@ -1099,7 +1128,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _ownedTerminalIds.remove(closingSessionId);
       }
       _sessionId = null;
-      _lastBufferedSessionId = '';
+      _terminalBufferRetry.reset();
+      _terminalBufferLoading = false;
       _creatingTerminalProjectId = null;
       _terminalCursorBottom = 0;
     });
@@ -1135,7 +1165,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       final terminal = existing.first;
       setState(() {
         _sessionId = terminal.id;
-        _lastBufferedSessionId = '';
+        _terminalBufferRetry.reset();
+        _terminalBufferLoading = true;
         _creatingTerminalProjectId = null;
         _terminalCursorBottom = 0;
       });
@@ -1284,7 +1315,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
     setState(() {
       _sessionId = null;
-      _lastBufferedSessionId = '';
+      _terminalBufferRetry.reset();
+      _terminalBufferLoading = false;
     });
     if (requestListIfMissing) {
       _ensureTerminalForSelectedProject();
@@ -1494,8 +1526,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     setState(() {
       _showTerminal = true;
       _workspaceMode = 'terminal';
+      _terminalBufferLoading = true;
     });
-    _lastBufferedSessionId = '';
     _sendInitialRelayRequests(force: true);
     _requestBufferIfReady(force: true);
     _focusTerminalViewSoon();
@@ -1592,7 +1624,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       }
       if (resetTerminal) {
         _sessionId = null;
-        _lastBufferedSessionId = '';
+        _terminalBufferRetry.reset();
+        _terminalBufferLoading = true;
         _creatingTerminalProjectId = null;
         _terminalCursorBottom = 0;
       }
@@ -2149,6 +2182,46 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                                   : _status,
                               hasDevice: _activeDevice != null,
                               onConnect: () => _connect(),
+                            ),
+                          if (_hasShownTerminal &&
+                              _workspaceMode == 'terminal' &&
+                              _terminalBufferLoading)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: AppColors.bgBase.withValues(
+                                      alpha: 0.72,
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.secondary,
+                                          ),
+                                        ),
+                                        const SizedBox(width: AppSpacing.s),
+                                        Text(
+                                          _t('terminal.loadingHistory'),
+                                          style: const TextStyle(
+                                            color: AppColors.textSecondary,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
                           FadeTransition(
                             opacity: _maskOpacity,

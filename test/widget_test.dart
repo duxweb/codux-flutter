@@ -30,6 +30,7 @@ void main() {
       'project.edit',
       'project.add',
       'project.rebuildTerminal',
+      'terminal.loadingHistory',
       'device.homeHint',
       'pair.confirmTitle',
       'update.checking',

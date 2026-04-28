@@ -248,6 +248,7 @@ const Map<String, String> _zhCN = {
   'connection.macDisconnected': 'Mac 端未连接',
   'terminal.creating': '正在创建终端，请稍后再输入',
   'terminal.createOrSelectFirst': '请先创建或选择终端',
+  'terminal.loadingHistory': '正在加载终端历史...',
   'terminal.rebuilding': '正在重建终端',
   'upload.imageUploading': '正在上传图片...',
   'upload.imageSentTool': '图片已上传，并通过 {tool} 粘贴快捷键发送',
@@ -520,6 +521,7 @@ const Map<String, String> _en = {
   'connection.macDisconnected': 'Mac is not connected',
   'terminal.creating': 'Creating terminal, please wait before typing',
   'terminal.createOrSelectFirst': 'Create or select a terminal first',
+  'terminal.loadingHistory': 'Loading terminal history...',
   'terminal.rebuilding': 'Rebuilding terminal',
   'upload.imageUploading': 'Uploading image...',
   'upload.imageSentTool':
