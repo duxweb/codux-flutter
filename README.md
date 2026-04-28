@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/duxweb/codux-flutter/releases">
-    <img src="https://img.shields.io/badge/version-0.1.3-22d3ee?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.1.4-22d3ee?style=flat-square" alt="Version">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-GPLv3-blue?style=flat-square" alt="License">
@@ -163,9 +163,9 @@ For local development without `android/key.properties`, release builds fall back
 4. Tag and push:
 
 ```bash
-git tag v0.1.3
+git tag v0.1.4
 git push origin main
-git push origin v0.1.3
+git push origin v0.1.4
 ```
 
 The release workflow builds `Codux-Mobile-<version>-android.apk`, generates `SHA256SUMS.txt`, extracts release notes, and uploads the assets to GitHub Releases.

@@ -4,6 +4,13 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-04-28
+
+### Changed
+
+- Moved project-list syncing feedback into the right-side project action button spinner, keeping the horizontal project list free of transient status text.
+- Kept the project list empty state focused on the final host response, showing "No projects" only after syncing completes with no projects.
+
 ## [0.1.3] - 2026-04-28
 
 ### Fixed
