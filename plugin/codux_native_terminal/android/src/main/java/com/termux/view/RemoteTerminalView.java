@@ -14,6 +14,7 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.AttributeSet;
+import android.util.TypedValue;
 import android.view.ActionMode;
 import android.view.inputmethod.InputMethodManager;
 import android.view.HapticFeedbackConstants;
@@ -258,7 +259,7 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
             }
         };
         attachSession(createRemoteTerminalSession());
-        setTextSize((int) (13 * getResources().getDisplayMetrics().scaledDensity));
+        setTextSize(Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 13, getResources().getDisplayMetrics())));
         setTypeface(loadTerminalTypeface());
         setTerminalCursorBlinkerRate(700);
         setTerminalCursorBlinkerState(true, false);
@@ -613,6 +614,7 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
             }
 
             @Override
+            @SuppressWarnings("deprecation")
             public boolean sendKeyEvent(KeyEvent event) {
                 if (TERMINAL_VIEW_KEY_LOGGING_ENABLED) {
                     mClient.logInfo(LOG_TAG, "IME: sendKeyEvent(" + event + ")");
@@ -1033,6 +1035,7 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
      * https://cs.android.com/android/platform/superproject/+/android-11.0.0_r40:frameworks/base/services/core/jni/com_android_server_input_InputManagerService.cpp;l=616
      */
     @Override
+    @SuppressWarnings("deprecation")
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (TERMINAL_VIEW_KEY_LOGGING_ENABLED)
             mClient.logInfo(LOG_TAG, "onKeyDown(keyCode=" + keyCode + ", isSystem()=" + event.isSystem() + ", event=" + event + ")");
