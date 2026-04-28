@@ -25,9 +25,6 @@ class ProjectTabBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
     final prefs = AppPreferences.of(context);
-    final placeholderText = loading
-        ? prefs.t('app.syncing')
-        : prefs.t('app.noProjects');
     return Material(
       color: AppColors.bgSurface,
       child: Container(
@@ -43,7 +40,7 @@ class ProjectTabBar extends StatelessWidget {
                   vertical: AppSpacing.s,
                 ),
                 children: [
-                  if (projects.isEmpty || loading)
+                  if (projects.isEmpty && !loading)
                     Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
@@ -52,18 +49,8 @@ class ProjectTabBar extends StatelessWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (loading)
-                              SizedBox(
-                                width: 12,
-                                height: 12,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: accent,
-                                ),
-                              ),
-                            if (loading) const SizedBox(width: AppSpacing.xs),
                             Text(
-                              placeholderText,
+                              prefs.t('app.noProjects'),
                               style: const TextStyle(
                                 color: AppColors.textSubtle,
                                 fontSize: 12,
