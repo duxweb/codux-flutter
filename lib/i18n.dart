@@ -235,6 +235,7 @@ const Map<String, String> _zhCN = {
   'pair.cancelled': '已取消配对',
   'pair.rejected': '配对已被 Mac 端拒绝',
   'pair.failed': '配对失败',
+  'pair.repairRequired': '端到端密钥已变化，请重新配对',
   'pair.confirmTitle': '确认配对此电脑',
   'pair.waitingTitle': '等待 Mac 端确认',
   'pair.confirmBody': '请确认 Mac 上显示的匹配码一致后再申请配对',
@@ -287,7 +288,7 @@ const Map<String, String> _zhCN = {
   'stats.noRankData': '暂无排行数据',
   'stats.noStats': '暂无统计数据',
   'stats.emptyHint': '运行 Codex / Claude / Gemini 后可在这里查看当前项目统计。',
-  'relay.qrMissingFields': '二维码内容缺少 server/code/secret，请重新扫描 Mac 端二维码',
+  'relay.qrMissingFields': '二维码内容缺少加密配对信息，请重新扫描 Mac 端二维码',
   'relay.qrEmpty': '二维码内容为空',
   'relay.qrInvalid': '无法识别二维码内容，请扫描 Mac 端最新配对码',
   'relay.requestFailed': '请求失败 {status}',
@@ -505,6 +506,7 @@ const Map<String, String> _en = {
   'pair.cancelled': 'Pairing cancelled',
   'pair.rejected': 'Pairing was rejected by Mac',
   'pair.failed': 'Pairing failed',
+  'pair.repairRequired': 'E2E key changed. Pair this device again',
   'pair.confirmTitle': 'Confirm this computer',
   'pair.waitingTitle': 'Waiting for Mac confirmation',
   'pair.confirmBody':
@@ -563,7 +565,7 @@ const Map<String, String> _en = {
   'stats.emptyHint':
       'Run Codex / Claude / Gemini to see current project stats here.',
   'relay.qrMissingFields':
-      'QR payload is missing server/code/secret. Scan the Mac QR code again',
+      'QR payload is missing encrypted pairing fields. Scan the Mac QR code again',
   'relay.qrEmpty': 'QR payload is empty',
   'relay.qrInvalid':
       'Unable to recognize QR payload. Scan the latest Mac pairing code',

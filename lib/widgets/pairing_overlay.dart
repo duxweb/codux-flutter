@@ -26,7 +26,7 @@ class PairingOverlay extends StatelessWidget {
     final hostName = payload.hostName?.trim().isNotEmpty == true
         ? payload.hostName!.trim()
         : 'Codux Mac';
-    final code = payload.code;
+    final code = payload.matchCode;
     final hostFromServer = payload.server
         .replaceFirst(RegExp(r'^https?://'), '')
         .replaceFirst(RegExp(r'/$'), '');

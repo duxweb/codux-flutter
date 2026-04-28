@@ -3,11 +3,21 @@ class PairingPayload {
     required this.server,
     required this.code,
     required this.secret,
+    required this.hostPublicKey,
+    required this.devicePrivateKey,
+    required this.devicePublicKey,
+    required this.matchCode,
+    this.cryptoVersion = 1,
     this.hostName,
   });
   final String server;
   final String code;
   final String secret;
+  final String hostPublicKey;
+  final String devicePrivateKey;
+  final String devicePublicKey;
+  final String matchCode;
+  final int cryptoVersion;
   final String? hostName;
 }
 
@@ -18,6 +28,10 @@ class StoredDevice {
     required this.deviceId,
     required this.token,
     required this.name,
+    this.hostPublicKey = '',
+    this.devicePrivateKey = '',
+    this.devicePublicKey = '',
+    this.cryptoVersion = 0,
     this.hostName,
   });
   final String server;
@@ -25,6 +39,10 @@ class StoredDevice {
   final String deviceId;
   final String token;
   final String name;
+  final String hostPublicKey;
+  final String devicePrivateKey;
+  final String devicePublicKey;
+  final int cryptoVersion;
   final String? hostName;
 
   StoredDevice copyWith({
@@ -33,6 +51,10 @@ class StoredDevice {
     String? deviceId,
     String? token,
     String? name,
+    String? hostPublicKey,
+    String? devicePrivateKey,
+    String? devicePublicKey,
+    int? cryptoVersion,
     String? hostName,
   }) {
     return StoredDevice(
@@ -41,6 +63,10 @@ class StoredDevice {
       deviceId: deviceId ?? this.deviceId,
       token: token ?? this.token,
       name: name ?? this.name,
+      hostPublicKey: hostPublicKey ?? this.hostPublicKey,
+      devicePrivateKey: devicePrivateKey ?? this.devicePrivateKey,
+      devicePublicKey: devicePublicKey ?? this.devicePublicKey,
+      cryptoVersion: cryptoVersion ?? this.cryptoVersion,
       hostName: hostName ?? this.hostName,
     );
   }
@@ -51,6 +77,12 @@ class StoredDevice {
     deviceId: '${json['deviceId'] ?? ''}',
     token: '${json['token'] ?? ''}',
     name: '${json['name'] ?? ''}',
+    hostPublicKey: '${json['hostPublicKey'] ?? ''}',
+    devicePrivateKey: '${json['devicePrivateKey'] ?? ''}',
+    devicePublicKey: '${json['devicePublicKey'] ?? ''}',
+    cryptoVersion: json['cryptoVersion'] is num
+        ? (json['cryptoVersion'] as num).toInt()
+        : int.tryParse('${json['cryptoVersion'] ?? ''}') ?? 0,
     hostName: json['hostName'] == null ? null : '${json['hostName']}',
   );
 
@@ -60,6 +92,10 @@ class StoredDevice {
     'deviceId': deviceId,
     'token': token,
     'name': name,
+    if (hostPublicKey.isNotEmpty) 'hostPublicKey': hostPublicKey,
+    if (devicePrivateKey.isNotEmpty) 'devicePrivateKey': devicePrivateKey,
+    if (devicePublicKey.isNotEmpty) 'devicePublicKey': devicePublicKey,
+    if (cryptoVersion > 0) 'cryptoVersion': cryptoVersion,
     if (hostName != null) 'hostName': hostName,
   };
 }
@@ -109,6 +145,28 @@ class RelayEnvelope {
     if (error != null) 'error': error,
     if (at != null) 'at': at,
   };
+
+  RelayEnvelope copyWith({
+    String? type,
+    String? id,
+    String? hostId,
+    String? deviceId,
+    String? sessionId,
+    int? seq,
+    Object? payload,
+    String? error,
+    int? at,
+  }) => RelayEnvelope(
+    type: type ?? this.type,
+    id: id ?? this.id,
+    hostId: hostId ?? this.hostId,
+    deviceId: deviceId ?? this.deviceId,
+    sessionId: sessionId ?? this.sessionId,
+    seq: seq ?? this.seq,
+    payload: payload ?? this.payload,
+    error: error ?? this.error,
+    at: at ?? this.at,
+  );
 }
 
 class ProjectInfo {

@@ -14,6 +14,7 @@ import 'i18n.dart';
 import 'models/remote_models.dart';
 import 'screens/scanner_screen.dart';
 import 'screens/settings_screen.dart';
+import 'services/e2e_crypto.dart';
 import 'services/log_service.dart';
 import 'services/relay_service.dart';
 import 'services/storage_service.dart';
@@ -31,6 +32,8 @@ import 'widgets/terminal_header.dart';
 import 'widgets/terminal_transition_mask.dart';
 import 'widgets/toolbar.dart';
 
+typedef RelaySocketFactory = dynamic Function(StoredDevice device);
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(
@@ -45,7 +48,14 @@ void main() {
 }
 
 class CoduxFlutterApp extends StatefulWidget {
-  const CoduxFlutterApp({super.key});
+  const CoduxFlutterApp({
+    super.key,
+    this.relaySocketFactory,
+    this.initialDevices,
+  });
+
+  final RelaySocketFactory? relaySocketFactory;
+  final List<StoredDevice>? initialDevices;
 
   @override
   State<CoduxFlutterApp> createState() => _CoduxFlutterAppState();
@@ -77,6 +87,8 @@ class _CoduxFlutterAppState extends State<CoduxFlutterApp> {
         child: CoduxHomePage(
           onChangeAccent: _setAccent,
           onChangeLocale: _setLocale,
+          relaySocketFactory: widget.relaySocketFactory,
+          initialDevices: widget.initialDevices,
         ),
       ),
     );
@@ -88,10 +100,14 @@ class CoduxHomePage extends StatefulWidget {
     super.key,
     required this.onChangeAccent,
     required this.onChangeLocale,
+    this.relaySocketFactory,
+    this.initialDevices,
   });
 
   final ValueChanged<AccentOption> onChangeAccent;
   final ValueChanged<LocaleOption> onChangeLocale;
+  final RelaySocketFactory? relaySocketFactory;
+  final List<StoredDevice>? initialDevices;
 
   @override
   State<CoduxHomePage> createState() => _CoduxHomePageState();
@@ -170,6 +186,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   String _lastBufferedSessionId = '';
 
   WebSocketSinkLike? _socket;
+  int _sendSeq = 0;
+  int _receiveSeq = 0;
+  Future<void> _sendChain = Future<void>.value();
+  Future<void> _receiveChain = Future<void>.value();
   StreamSubscription? _socketSubscription;
   Timer? _reconnectTimer;
   Timer? _healthTimer;
@@ -220,6 +240,17 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   Future<void> _bootstrap() async {
+    final initialDevices = widget.initialDevices;
+    if (initialDevices != null) {
+      if (!mounted) return;
+      setState(() {
+        _devices = initialDevices;
+        _activeDevice = initialDevices.isNotEmpty ? initialDevices.first : null;
+        _showTerminal = false;
+      });
+      if (initialDevices.isNotEmpty) _connect(initialDevices.first, true);
+      return;
+    }
     await _loadDeviceName();
     final loadedSettings = await _storage.loadSettings();
     final devices = await _storage.loadDevices();
@@ -286,8 +317,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   void _handleScannedPayload(String raw) {
     if (!_showScanner || _pendingPairing != null) return;
+    unawaited(_prepareScannedPayload(raw));
+  }
+
+  Future<void> _prepareScannedPayload(String raw) async {
     try {
-      final payload = parsePairingPayload(raw);
+      final payload = await parsePairingPayload(raw);
+      if (!mounted || !_showScanner || _pendingPairing != null) return;
       setState(() {
         _showScanner = false;
         _pendingPairing = payload;
@@ -296,6 +332,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _pairingError = null;
       });
     } catch (error) {
+      if (!mounted) return;
       setState(() => _showScanner = false);
       _showToast(error.toString().replaceFirst('Exception: ', ''));
     }
@@ -356,6 +393,16 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _pairingError = null;
         _status = _t('pair.cancelled');
       });
+    } on PairingRejectedException {
+      if (!mounted) return;
+      setState(() {
+        _pendingPairing = null;
+        _pairingInFlight = false;
+        _pairingCancelled = false;
+        _pairingError = null;
+        _status = _t('pair.rejected');
+      });
+      _showToast(_t('pair.rejected'));
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -396,6 +443,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _healthTimer?.cancel();
     _socketSubscription?.cancel();
     _socket?.close();
+    _sendSeq = 0;
+    _receiveSeq = 0;
+    _sendChain = Future<void>.value();
+    _receiveChain = Future<void>.value();
+    RemoteE2ECrypto.clearCache();
     if (!background) _clearTerminal();
     setState(() {
       _relayReady = false;
@@ -412,17 +464,18 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _activeDevice = target;
     });
     try {
-      final channel = createRelaySocket(target);
+      final channel = (widget.relaySocketFactory ?? createRelaySocket)(target);
       final socket = _WebSocketSink(channel);
       _socket = socket;
       _socketSubscription = channel.stream.listen(
-        (event) => _handleSocketMessage(event, target),
-        onDone: () => _handleSocketClosed(target),
+        (event) => _handleSocketMessage(event, target, socket),
+        onDone: () => _handleSocketClosed(target, socket),
         onError: (error) {
+          if (_socket != socket) return;
           if (!_backgroundConnect) {
             setState(() => _status = _t('app.connectError'));
           }
-          _handleSocketClosed(target);
+          _handleSocketClosed(target, socket);
         },
       );
       channel.ready.catchError((error) {
@@ -430,7 +483,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         if (!_backgroundConnect && mounted) {
           setState(() => _status = _t('connection.failedRetry'));
         }
-        _handleSocketClosed(target);
+        _handleSocketClosed(target, socket);
         return null;
       });
       _healthTimer = Timer(const Duration(seconds: 6), () {
@@ -449,7 +502,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  void _handleSocketClosed(StoredDevice target) {
+  void _handleSocketClosed(
+    StoredDevice target,
+    WebSocketSinkLike closedSocket,
+  ) {
+    if (_socket != closedSocket) return;
     _healthTimer?.cancel();
     _healthTimer = null;
     _socketSubscription?.cancel();
@@ -511,15 +568,74 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         '[codux-flutter-relay] send type=${message.type} session=${message.sessionId ?? ''} payload=${message.payload ?? ''}',
       );
     }
-    sink.add(encodeEnvelope(message));
+    final activeDevice = _activeDevice;
+    final seq = activeDevice == null ? null : ++_sendSeq;
+    final previous = _sendChain.catchError((_) {});
+    final task = previous
+        .then((_) async {
+          if (target == null && _socket != sink) return;
+          if (activeDevice == null) {
+            sink.add(encodeEnvelope(message));
+            return;
+          }
+          final encrypted = await RemoteE2ECrypto.encryptEnvelope(
+            inner: message,
+            device: activeDevice,
+            seq: seq!,
+          );
+          if (target == null && _socket != sink) return;
+          sink.add(encodeEnvelope(encrypted));
+        })
+        .catchError((Object error) {
+          CoduxLog.error('[codux-flutter-e2e] encrypt failed: $error');
+          if (mounted) setState(() => _status = _t('pair.repairRequired'));
+        });
+    _sendChain = task;
     return true;
   }
 
-  void _handleSocketMessage(Object event, StoredDevice target) {
+  void _handleSocketMessage(
+    Object event,
+    StoredDevice target,
+    WebSocketSinkLike sourceSocket,
+  ) {
+    if (_socket != sourceSocket) return;
+    final previous = _receiveChain.catchError((_) {});
+    final task = previous
+        .then((_) {
+          if (_socket != sourceSocket) return Future<void>.value();
+          return _handleSocketMessageAsync(event, target);
+        })
+        .catchError((Object error) {
+          CoduxLog.error('[codux-flutter-e2e] receive queue failed: $error');
+        });
+    _receiveChain = task;
+  }
+
+  Future<void> _handleSocketMessageAsync(
+    Object event,
+    StoredDevice target,
+  ) async {
     try {
-      final message = RelayEnvelope.fromJson(
+      var message = RelayEnvelope.fromJson(
         jsonDecode('$event') as Map<String, dynamic>,
       );
+      if (message.type == 'secure.message') {
+        message = await RemoteE2ECrypto.decryptEnvelope(
+          outer: message,
+          device: target,
+        );
+        final seq = message.seq;
+        if (seq != null) {
+          if (seq <= _receiveSeq) {
+            CoduxLog.warn(
+              '[codux-flutter-e2e] drop replay seq=$seq previous=$_receiveSeq',
+            );
+            return;
+          }
+          _receiveSeq = seq;
+        }
+      }
       _healthTimer?.cancel();
       _healthTimer = null;
       switch (message.type) {
@@ -550,6 +666,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _status = messageText;
           });
           _scheduleReconnect(target);
+        case 'secure.required':
+          setState(() {
+            _status = _t('pair.repairRequired');
+          });
         case 'host.info':
           final payload = message.payload;
           if (payload is Map && payload['name'] != null) {
@@ -718,16 +838,16 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               _fileEditorEditing = false;
               _fileEditorLoading = false;
               if (!_fileEditorEditable) {
-                _showToast(AppPreferences.of(context).t('file.readOnlyLarge'));
+                _showToast(_t('file.readOnlyLarge'));
               }
             });
           }
         case 'file.written':
           setState(() => _fileEditorSaving = false);
-          _showToast(AppPreferences.of(context).t('file.saved'));
+          _showToast(_t('file.saved'));
         case 'file.renamed':
           _requestProjectFiles(_projectFilesPath);
-          _showToast(AppPreferences.of(context).t('file.renamed'));
+          _showToast(_t('file.renamed'));
         case 'file.deleted':
           final payload = message.payload;
           final deletedPath = payload is Map
@@ -737,7 +857,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             setState(() => _editingFilePath = null);
           }
           _requestProjectFiles(_projectFilesPath);
-          _showToast(AppPreferences.of(context).t('file.deleted'));
+          _showToast(_t('file.deleted'));
         case 'terminal.uploaded':
           final payload = message.payload;
           if (payload is Map && payload['path'] != null) {
@@ -770,7 +890,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                     : _t('remote.error'));
           });
       }
-    } catch (_) {}
+    } catch (error) {
+      CoduxLog.error('[codux-flutter-e2e] receive failed: $error');
+    }
   }
 
   void _updateDevice(String deviceId, {String? hostName}) {

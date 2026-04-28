@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/duxweb/codux-flutter/releases">
-    <img src="https://img.shields.io/badge/version-1.0.0-22d3ee?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.1.0-22d3ee?style=flat-square" alt="Version">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-GPLv3-blue?style=flat-square" alt="License">
@@ -71,7 +71,7 @@ Codux macOS host
   └─ Confirms mobile pairing and forwards terminal/file/stat events
 ```
 
-The mobile app does not try to become the source of truth for terminal sessions. It renders and interacts with the host-owned workspace through explicit relay protocol messages.
+The mobile app does not try to become the source of truth for terminal sessions. It renders and interacts with the host-owned workspace through explicit relay protocol messages. Business payloads are wrapped as end-to-end encrypted `secure.message` envelopes; the derived host/device symmetric key is cached for the active connection, while terminal input/output is still sent through ordered queues.
 
 ## Requirements
 
@@ -163,9 +163,9 @@ For local development without `android/key.properties`, release builds fall back
 4. Tag and push:
 
 ```bash
-git tag v1.0.0
+git tag v0.1.0
 git push origin main
-git push origin v1.0.0
+git push origin v0.1.0
 ```
 
 The release workflow builds `Codux-Mobile-<version>-android.apk`, generates `SHA256SUMS.txt`, extracts release notes, and uploads the assets to GitHub Releases.

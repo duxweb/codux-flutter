@@ -5,24 +5,42 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../i18n.dart';
 import '../models/remote_models.dart';
+import 'e2e_crypto.dart';
 
-PairingPayload parsePairingPayload(String input) {
+Future<PairingPayload> parsePairingPayload(String input) async {
   final parsed = _decodePairingPayload(input);
   final server = parsed['server']?.toString().replaceFirst(RegExp(r'/$'), '');
   final code = parsed['code']?.toString();
   final secret = parsed['secret']?.toString();
+  final hostPublicKey = parsed['hostPublicKey']?.toString() ?? '';
+  final cryptoVersion = parsed['cryptoVersion'] is num
+      ? (parsed['cryptoVersion'] as num).toInt()
+      : int.tryParse('${parsed['cryptoVersion'] ?? ''}') ?? 0;
   if (server == null ||
       server.isEmpty ||
       code == null ||
       code.isEmpty ||
       secret == null ||
-      secret.isEmpty) {
+      secret.isEmpty ||
+      hostPublicKey.isEmpty ||
+      cryptoVersion < 1) {
     throw Exception(tr('relay.qrMissingFields', LocaleChoices.system.id));
   }
+  final deviceKeyPair = await RemoteE2ECrypto.newDeviceKeyPair();
   return PairingPayload(
     server: server,
     code: code,
     secret: secret,
+    hostPublicKey: hostPublicKey,
+    devicePrivateKey: deviceKeyPair.privateKey,
+    devicePublicKey: deviceKeyPair.publicKey,
+    matchCode: RemoteE2ECrypto.matchCode(
+      hostPublicKey: hostPublicKey,
+      devicePublicKey: deviceKeyPair.publicKey,
+      pairingCode: code,
+      pairingSecret: secret,
+    ),
+    cryptoVersion: cryptoVersion,
     hostName: parsed['hostName']?.toString(),
   );
 }
@@ -88,7 +106,7 @@ Future<void> claimPairing(PairingPayload payload, String name) async {
     'code': payload.code,
     'secret': payload.secret,
     'name': name,
-    'publicKey': '',
+    'publicKey': payload.devicePublicKey,
   });
 }
 
@@ -96,6 +114,12 @@ class PairingCancelledException implements Exception {
   const PairingCancelledException();
   @override
   String toString() => tr('pair.cancelled', LocaleChoices.system.id);
+}
+
+class PairingRejectedException implements Exception {
+  const PairingRejectedException();
+  @override
+  String toString() => tr('pair.rejected', LocaleChoices.system.id);
 }
 
 Future<StoredDevice> waitPairingConfirmed(
@@ -111,7 +135,7 @@ Future<StoredDevice> waitPairingConfirmed(
     });
     if (isCancelled?.call() == true) throw const PairingCancelledException();
     if (status['status'] == 'rejected') {
-      throw Exception(tr('pair.rejected', LocaleChoices.system.id));
+      throw const PairingRejectedException();
     }
     if (status['status'] == 'confirmed' &&
         status['deviceId'] != null &&
@@ -122,8 +146,15 @@ Future<StoredDevice> waitPairingConfirmed(
         deviceId: '${status['deviceId']}',
         token: '${status['token']}',
         name: name,
+        hostPublicKey: payload.hostPublicKey,
+        devicePrivateKey: payload.devicePrivateKey,
+        devicePublicKey: payload.devicePublicKey,
+        cryptoVersion: payload.cryptoVersion,
         hostName: status['hostName']?.toString() ?? payload.hostName,
       );
+    }
+    if (status['status'] == 'confirmed') {
+      throw Exception('Pairing confirmed without device credentials');
     }
     for (var step = 0; step < 20; step += 1) {
       if (isCancelled?.call() == true) throw const PairingCancelledException();
