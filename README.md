@@ -153,7 +153,7 @@ Generate the base64 value from a keystore:
 base64 -i codux-release.jks | pbcopy
 ```
 
-For local development without `android/key.properties`, release builds fall back to debug signing so `flutter run --release` still works. GitHub published releases require the signing secrets.
+For local development without `android/key.properties`, release builds fall back to debug signing so `flutter run --release` still works. GitHub published releases use the signing secrets when configured and otherwise publish the same debug-signing fallback APK with a workflow warning.
 
 ### Publish A Version
 

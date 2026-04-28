@@ -92,9 +92,8 @@ jobs:
           CODUX_ANDROID_KEY_PASSWORD: ${{ secrets.CODUX_ANDROID_KEY_PASSWORD }}
         run: |
           if [[ -z "${CODUX_ANDROID_KEYSTORE_BASE64:-}" || -z "${CODUX_ANDROID_KEYSTORE_PASSWORD:-}" || -z "${CODUX_ANDROID_KEY_ALIAS:-}" || -z "${CODUX_ANDROID_KEY_PASSWORD:-}" ]]; then
-            echo "Android release signing secrets are required for published releases" >&2
-            echo "Required secrets: CODUX_ANDROID_KEYSTORE_BASE64, CODUX_ANDROID_KEYSTORE_PASSWORD, CODUX_ANDROID_KEY_ALIAS, CODUX_ANDROID_KEY_PASSWORD" >&2
-            exit 1
+            echo "::warning::Android release signing secrets are not configured; publishing APK with debug signing fallback."
+            exit 0
           fi
 
       - name: Configure Android signing

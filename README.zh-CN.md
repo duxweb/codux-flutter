@@ -153,7 +153,7 @@ flutter build apk --release --dart-define=CODUX_LOG_LEVEL=warn
 base64 -i codux-release.jks | pbcopy
 ```
 
-本地没有 `android/key.properties` 时，release 构建会回退到 debug 签名，方便本地 `flutter run --release`。GitHub 正式发布会强制要求签名 secrets。
+本地没有 `android/key.properties` 时，release 构建会回退到 debug 签名，方便本地 `flutter run --release`。GitHub 发布时如果已配置签名 secrets 会使用正式签名，否则会带 workflow warning 发布同样的 debug 签名兜底 APK。
 
 ### 发布版本
 
