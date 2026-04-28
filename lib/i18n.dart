@@ -1,0 +1,707 @@
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'theme/app_theme.dart';
+
+class AccentOption {
+  const AccentOption(this.id, this.label, this.color);
+  final String id;
+  final String label;
+  final Color color;
+}
+
+class AccentChoices {
+  static const cyan = AccentOption('cyan', 'Cyan', AppColors.cyan);
+  static const lime = AccentOption('lime', 'Lime', AppColors.accent);
+  static const violet = AccentOption('violet', 'Violet', Color(0xFFA78BFA));
+  static const rose = AccentOption('rose', 'Rose', Color(0xFFF472B6));
+  static const orange = AccentOption('orange', 'Orange', Color(0xFFFB923C));
+  static const sky = AccentOption('sky', 'Sky', Color(0xFF38BDF8));
+
+  static const all = [cyan, lime, violet, rose, orange, sky];
+
+  static AccentOption byId(String id) =>
+      all.firstWhere((item) => item.id == id, orElse: () => cyan);
+}
+
+class LocaleOption {
+  const LocaleOption(this.id, this.label);
+  final String id;
+  final String label;
+}
+
+class LocaleChoices {
+  static const system = LocaleOption('system', '跟随系统');
+  static const simplifiedChinese = LocaleOption('simplifiedChinese', '简体中文');
+  static const traditionalChinese = LocaleOption('traditionalChinese', '繁體中文');
+  static const english = LocaleOption('english', 'English');
+  static const japanese = LocaleOption('japanese', '日本語');
+  static const korean = LocaleOption('korean', '한국어');
+  static const french = LocaleOption('french', 'Français');
+  static const german = LocaleOption('german', 'Deutsch');
+  static const spanish = LocaleOption('spanish', 'Español');
+  static const portugueseBrazil = LocaleOption(
+    'portugueseBrazil',
+    'Português (Brasil)',
+  );
+  static const russian = LocaleOption('russian', 'Русский');
+
+  static const zhCN = simplifiedChinese;
+  static const enUS = english;
+
+  static const all = [
+    system,
+    simplifiedChinese,
+    traditionalChinese,
+    english,
+    japanese,
+    korean,
+    french,
+    german,
+    spanish,
+    portugueseBrazil,
+    russian,
+  ];
+
+  static LocaleOption byId(String id) {
+    final normalized = switch (id) {
+      'zh-CN' || 'zh_CN' || 'zh-Hans' => 'simplifiedChinese',
+      'zh-TW' || 'zh_TW' || 'zh-Hant' => 'traditionalChinese',
+      'en-US' || 'en_US' || 'en' => 'english',
+      'ja-JP' || 'ja_JP' || 'ja' => 'japanese',
+      'ko-KR' || 'ko_KR' || 'ko' => 'korean',
+      'fr-FR' || 'fr_FR' || 'fr' => 'french',
+      'de-DE' || 'de_DE' || 'de' => 'german',
+      'es-ES' || 'es_ES' || 'es' => 'spanish',
+      'pt-BR' || 'pt_BR' || 'pt' => 'portugueseBrazil',
+      'ru-RU' || 'ru_RU' || 'ru' => 'russian',
+      _ => id,
+    };
+    return all.firstWhere(
+      (item) => item.id == normalized,
+      orElse: () => system,
+    );
+  }
+}
+
+Locale? flutterLocaleForOption(LocaleOption option) {
+  if (option.id == 'system') return null;
+  return switch (option.id) {
+    'simplifiedChinese' => const Locale('zh', 'CN'),
+    'traditionalChinese' => const Locale('zh', 'TW'),
+    'english' => const Locale('en', 'US'),
+    'japanese' => const Locale('ja', 'JP'),
+    'korean' => const Locale('ko', 'KR'),
+    'french' => const Locale('fr', 'FR'),
+    'german' => const Locale('de', 'DE'),
+    'spanish' => const Locale('es', 'ES'),
+    'portugueseBrazil' => const Locale('pt', 'BR'),
+    'russian' => const Locale('ru', 'RU'),
+    _ => const Locale('en', 'US'),
+  };
+}
+
+const supportedFlutterLocales = [
+  Locale('zh', 'CN'),
+  Locale('zh', 'TW'),
+  Locale('en', 'US'),
+  Locale('ja', 'JP'),
+  Locale('ko', 'KR'),
+  Locale('fr', 'FR'),
+  Locale('de', 'DE'),
+  Locale('es', 'ES'),
+  Locale('pt', 'BR'),
+  Locale('ru', 'RU'),
+];
+
+const Map<String, String> _zhCN = {
+  'app.unbound': '未绑定电脑',
+  'app.connected': '已连接',
+  'app.notConnected': '未连接',
+  'app.connecting': '连接中...',
+  'app.disconnected': '已断开',
+  'app.reconnecting': '连接断开，后台重试中',
+  'app.wsNotConnected': 'WebSocket 未连接',
+  'app.connectError': '连接错误',
+  'app.tapToConnect': '点击连接',
+  'app.addDevice': '添加电脑',
+  'app.devicesEmpty': '还没有绑定的电脑',
+  'app.noProjects': '暂无项目',
+  'app.refresh': '刷新',
+  'app.splits': '分屏列表',
+  'app.splitsEmpty': '还没有终端，点下方新建',
+  'app.newTerminal': '新建终端',
+  'app.terminal': '终端',
+  'app.removeDevice': '移除电脑',
+  'app.removeDeviceConfirm': '本地删除 {name}？\n（Mac 端仍需主动移除设备）',
+  'app.cancel': '取消',
+  'app.remove': '移除',
+  'app.delete': '删除',
+  'app.closeSplit': '删除分屏',
+  'app.closeSplitConfirm': '关闭 {name}？',
+  'app.settings': '设置',
+  'app.checkUpdate': '检查更新',
+  'app.updatePending': '检查更新功能预留',
+  'app.about': '关于 Codux',
+  'app.aboutText':
+      'Codux Mobile 是 Codux 的移动控制端，用于通过自建中继服务器安全连接 Mac，远程查看项目分屏、操作终端并管理多台电脑。',
+  'app.github': 'GitHub',
+  'app.licenses': '协议',
+  'app.close': '关闭',
+  'toolbar.copyEmpty': '长按终端内容并拖动选择后再复制',
+  'toolbar.copyDone': '已复制选中内容',
+  'toolbar.uploadPending': '图片上传需要手机端→Mac 端文件传输协议，已预留入口',
+  'toolbar.voiceUnavailable': '语音输入不可用：{reason}',
+  'toolbar.voiceListening': '正在听写，识别完成后会输入到终端',
+  'file.menuRename': '重命名',
+  'file.menuCopyPath': '复制路径',
+  'file.menuDelete': '删除',
+  'file.pathCopied': '已复制路径',
+  'file.renamed': '已重命名',
+  'file.deleted': '已删除',
+  'file.renameTitle': '重命名',
+  'file.renameLabel': '文件名',
+  'file.deleteTitle': '删除文件',
+  'file.deleteConfirm': '确认删除 {name}？',
+  'file.nameInvalid': '文件名不能包含 /',
+  'file.cancel': '取消',
+  'file.save': '保存',
+  'file.edit': '编辑',
+  'file.readOnlyLarge': '大文件已用只读模式打开',
+  'file.saved': '文件已保存',
+  'pair.title': '绑定电脑',
+  'pair.tapToScan': '点击此处打开相机扫码',
+  'pair.heading': '扫描电脑端二维码',
+  'pair.subheading': '在电脑上打开 Codux ▸ 远程，扫码快速绑定设备',
+  'pair.manualToggleOpen': '手动输入连接码',
+  'pair.manualToggleClose': '收起手动输入',
+  'pair.manualHint': '粘贴二维码内容',
+  'pair.paste': '粘贴',
+  'pair.submit': '申请配对',
+  'pair.networkHint': '确保手机与电脑可访问同一中继服务器',
+  'pair.submitting': '提交配对申请...',
+  'pair.waiting': '等待 Mac 端确认...',
+  'pair.success': '配对成功，正在连接',
+  'pair.scanned': '已扫描二维码，点击申请配对',
+  'pair.scanTitle': '扫描 Mac 端配对码',
+  'pair.scanHint': '保持二维码在框内，识别后返回主界面',
+  'pair.close': '关闭',
+  'settings.title': '设置',
+  'settings.nameLabel': '本机名称',
+  'settings.nameHint': '本机名称',
+  'settings.useDeviceName': '使用设备名：{name}',
+  'settings.themeLabel': '主题色',
+  'settings.localeLabel': '语言',
+  'settings.save': '保存设置',
+  'settings.saved': '设置已保存',
+  'cmd.hint': '命令（备用输入）',
+};
+
+const Map<String, String> _zhTW = {
+  'app.unbound': '未綁定電腦',
+  'app.connected': '已連線',
+  'app.notConnected': '未連線',
+  'app.connecting': '連線中...',
+  'app.disconnected': '已斷線',
+  'app.reconnecting': '連線中斷，背景重試中',
+  'app.wsNotConnected': 'WebSocket 未連線',
+  'app.connectError': '連線錯誤',
+  'app.tapToConnect': '點擊連線',
+  'app.addDevice': '新增電腦',
+  'app.devicesEmpty': '尚未綁定電腦',
+  'app.noProjects': '暫無專案',
+  'app.refresh': '重新整理',
+  'app.splits': '分割視窗',
+  'app.splitsEmpty': '尚無終端，點下方新增',
+  'app.newTerminal': '新增終端',
+  'app.terminal': '終端',
+  'app.removeDevice': '移除電腦',
+  'app.removeDeviceConfirm': '從本機刪除 {name}？\n（Mac 端仍需主動移除裝置）',
+  'app.cancel': '取消',
+  'app.remove': '移除',
+  'app.delete': '刪除',
+  'app.closeSplit': '刪除分割',
+  'app.closeSplitConfirm': '關閉 {name}？',
+  'app.settings': '設定',
+  'app.checkUpdate': '檢查更新',
+  'app.updatePending': '檢查更新功能預留',
+  'app.about': '關於 Codux',
+  'app.aboutText':
+      'Codux Mobile 是 Codux 的行動控制端，可透過自架中繼伺服器安全連線 Mac，遠端查看專案分割、操作終端並管理多台電腦。',
+  'app.github': 'GitHub',
+  'app.licenses': '授權',
+  'app.close': '關閉',
+  'toolbar.copyEmpty': '長按終端內容並拖曳選取後再複製',
+  'toolbar.copyDone': '已複製選取內容',
+  'toolbar.uploadPending': '圖片上傳需要手機端→Mac 端檔案傳輸協定，已預留入口',
+  'toolbar.voiceUnavailable': '語音輸入不可用：{reason}',
+  'toolbar.voiceListening': '正在聽寫，辨識完成後會輸入到終端',
+  'file.menuRename': '重新命名',
+  'file.menuCopyPath': '複製路徑',
+  'file.menuDelete': '刪除',
+  'file.pathCopied': '已複製路徑',
+  'file.renamed': '已重新命名',
+  'file.deleted': '已刪除',
+  'file.renameTitle': '重新命名',
+  'file.renameLabel': '檔案名稱',
+  'file.deleteTitle': '刪除檔案',
+  'file.deleteConfirm': '確認刪除 {name}？',
+  'file.nameInvalid': '檔案名稱不能包含 /',
+  'file.cancel': '取消',
+  'file.save': '儲存',
+  'file.edit': '編輯',
+  'file.readOnlyLarge': '大型檔案已用唯讀模式開啟',
+  'file.saved': '檔案已儲存',
+  'pair.title': '綁定電腦',
+  'pair.tapToScan': '點擊此處開啟相機掃碼',
+  'pair.heading': '掃描電腦端 QR Code',
+  'pair.subheading': '在電腦上開啟 Codux ▸ 遠端，掃碼快速綁定裝置',
+  'pair.manualToggleOpen': '手動輸入連線碼',
+  'pair.manualToggleClose': '收起手動輸入',
+  'pair.manualHint': '貼上 QR Code 內容',
+  'pair.paste': '貼上',
+  'pair.submit': '申請配對',
+  'pair.networkHint': '確保手機與電腦可存取同一中繼伺服器',
+  'pair.submitting': '正在提交配對申請...',
+  'pair.waiting': '等待 Mac 端確認...',
+  'pair.success': '配對成功，正在連線',
+  'pair.scanned': '已掃描 QR Code，點擊申請配對',
+  'pair.scanTitle': '掃描 Mac 端配對碼',
+  'pair.scanHint': '保持 QR Code 在框內，辨識後返回主畫面',
+  'pair.close': '關閉',
+  'settings.title': '設定',
+  'settings.nameLabel': '本機名稱',
+  'settings.nameHint': '本機名稱',
+  'settings.useDeviceName': '使用裝置名稱：{name}',
+  'settings.themeLabel': '主題色',
+  'settings.localeLabel': '語言',
+  'settings.save': '儲存設定',
+  'settings.saved': '設定已儲存',
+  'cmd.hint': '命令（備用輸入）',
+};
+
+const Map<String, String> _en = {
+  'app.unbound': 'No device',
+  'app.connected': 'Connected',
+  'app.notConnected': 'Disconnected',
+  'app.connecting': 'Connecting...',
+  'app.disconnected': 'Disconnected',
+  'app.reconnecting': 'Disconnected, retrying in background',
+  'app.wsNotConnected': 'WebSocket not connected',
+  'app.connectError': 'Connection error',
+  'app.tapToConnect': 'Tap to connect',
+  'app.addDevice': 'Add computer',
+  'app.devicesEmpty': 'No paired computers yet',
+  'app.noProjects': 'No projects',
+  'app.refresh': 'Refresh',
+  'app.splits': 'Splits',
+  'app.splitsEmpty': 'No terminals yet, create one below',
+  'app.newTerminal': 'New terminal',
+  'app.terminal': 'Terminal',
+  'app.removeDevice': 'Remove computer',
+  'app.removeDeviceConfirm':
+      'Delete {name} locally?\n(You also need to remove it on Mac)',
+  'app.cancel': 'Cancel',
+  'app.remove': 'Remove',
+  'app.delete': 'Delete',
+  'app.closeSplit': 'Close split',
+  'app.closeSplitConfirm': 'Close {name}?',
+  'app.settings': 'Settings',
+  'app.checkUpdate': 'Check for updates',
+  'app.updatePending': 'Update check is reserved',
+  'app.about': 'About Codux',
+  'app.aboutText':
+      'Codux Mobile is the mobile companion for Codux. It connects to your Mac through a self-hosted relay, controls project terminals, and manages paired computers.',
+  'app.github': 'GitHub',
+  'app.licenses': 'Licenses',
+  'app.close': 'Close',
+  'toolbar.copyEmpty':
+      'Long-press terminal text and drag to select before copying',
+  'toolbar.copyDone': 'Copied selection',
+  'toolbar.uploadPending':
+      'Image upload needs the mobile-to-Mac file transfer protocol and is reserved',
+  'toolbar.voiceUnavailable': 'Voice input unavailable: {reason}',
+  'toolbar.voiceListening':
+      'Listening. Recognized text will be sent to the terminal',
+  'file.menuRename': 'Rename',
+  'file.menuCopyPath': 'Copy path',
+  'file.menuDelete': 'Delete',
+  'file.pathCopied': 'Path copied',
+  'file.renamed': 'Renamed',
+  'file.deleted': 'Deleted',
+  'file.renameTitle': 'Rename',
+  'file.renameLabel': 'File name',
+  'file.deleteTitle': 'Delete file',
+  'file.deleteConfirm': 'Delete {name}?',
+  'file.nameInvalid': 'File name cannot contain /',
+  'file.cancel': 'Cancel',
+  'file.save': 'Save',
+  'file.edit': 'Edit',
+  'file.readOnlyLarge': 'Large file opened in read-only mode',
+  'file.saved': 'File saved',
+  'pair.title': 'Pair computer',
+  'pair.tapToScan': 'Tap to open camera',
+  'pair.heading': 'Scan the Mac QR code',
+  'pair.subheading': 'Open Codux ▸ Remote on Mac and scan to pair instantly',
+  'pair.manualToggleOpen': 'Enter code manually',
+  'pair.manualToggleClose': 'Hide manual input',
+  'pair.manualHint': 'Paste QR payload',
+  'pair.paste': 'Paste',
+  'pair.submit': 'Request pairing',
+  'pair.networkHint':
+      'Make sure phone and computer can reach the same relay server',
+  'pair.submitting': 'Submitting pairing request...',
+  'pair.waiting': 'Waiting for Mac confirmation...',
+  'pair.success': 'Paired, connecting',
+  'pair.scanned': 'QR scanned, tap to request pairing',
+  'pair.scanTitle': 'Scan Mac pairing code',
+  'pair.scanHint': 'Keep the QR code in frame, then return automatically',
+  'pair.close': 'Close',
+  'settings.title': 'Settings',
+  'settings.nameLabel': 'Device name',
+  'settings.nameHint': 'Device name',
+  'settings.useDeviceName': 'Use detected name: {name}',
+  'settings.themeLabel': 'Theme color',
+  'settings.localeLabel': 'Language',
+  'settings.save': 'Save settings',
+  'settings.saved': 'Settings saved',
+  'cmd.hint': 'Command (fallback input)',
+};
+
+const Map<String, String> _ja = {
+  'app.unbound': '未接続のコンピュータ',
+  'app.connected': '接続済み',
+  'app.notConnected': '未接続',
+  'app.connecting': '接続中...',
+  'app.disconnected': '切断済み',
+  'app.reconnecting': '切断されました。バックグラウンドで再試行中',
+  'app.wsNotConnected': 'WebSocket が未接続です',
+  'app.connectError': '接続エラー',
+  'app.tapToConnect': 'タップして接続',
+  'app.addDevice': 'コンピュータを追加',
+  'app.devicesEmpty': 'ペアリング済みのコンピュータはありません',
+  'app.noProjects': 'プロジェクトなし',
+  'app.refresh': '更新',
+  'app.splits': '分割',
+  'app.splitsEmpty': '端末はまだありません。下から作成してください',
+  'app.newTerminal': '新規端末',
+  'app.terminal': '端末',
+  'app.removeDevice': 'コンピュータを削除',
+  'app.removeDeviceConfirm': '{name} をローカルから削除しますか？\n（Mac 側でも削除が必要です）',
+  'app.cancel': 'キャンセル',
+  'app.remove': '削除',
+  'app.delete': '削除',
+  'app.closeSplit': '分割を閉じる',
+  'app.closeSplitConfirm': '{name} を閉じますか？',
+  'app.settings': '設定',
+  'app.checkUpdate': 'アップデートを確認',
+  'app.updatePending': 'アップデート確認は準備中です',
+  'app.about': 'Codux について',
+  'app.aboutText':
+      'Codux Mobile は Codux のモバイル操作端末です。セルフホストのリレー経由で Mac に安全に接続し、プロジェクト端末の操作とコンピュータ管理を行えます。',
+  'app.github': 'GitHub',
+  'app.licenses': 'ライセンス',
+  'app.close': '閉じる',
+  'toolbar.copyEmpty': '端末テキストを長押ししてドラッグ選択してからコピーしてください',
+  'toolbar.copyDone': '選択範囲をコピーしました',
+  'toolbar.uploadPending': '画像アップロードにはモバイル→Mac のファイル転送プロトコルが必要です',
+  'toolbar.voiceUnavailable': '音声入力を利用できません：{reason}',
+  'toolbar.voiceListening': '聞き取り中です。認識後に端末へ入力します',
+  'file.menuRename': '名前を変更',
+  'file.menuCopyPath': 'パスをコピー',
+  'file.menuDelete': '削除',
+  'file.pathCopied': 'パスをコピーしました',
+  'file.renamed': '名前を変更しました',
+  'file.deleted': '削除しました',
+  'file.renameTitle': '名前を変更',
+  'file.renameLabel': 'ファイル名',
+  'file.deleteTitle': 'ファイルを削除',
+  'file.deleteConfirm': '{name} を削除しますか？',
+  'file.nameInvalid': 'ファイル名に / は使用できません',
+  'file.cancel': 'キャンセル',
+  'file.save': '保存',
+  'file.edit': '編集',
+  'file.readOnlyLarge': '大きなファイルは読み取り専用で開きました',
+  'file.saved': 'ファイルを保存しました',
+  'pair.title': 'コンピュータをペアリング',
+  'pair.tapToScan': 'タップしてカメラを開く',
+  'pair.heading': 'Mac の QR コードをスキャン',
+  'pair.subheading': 'Mac で Codux ▸ Remote を開き、スキャンしてペアリングします',
+  'pair.manualToggleOpen': '手動でコードを入力',
+  'pair.manualToggleClose': '手動入力を閉じる',
+  'pair.manualHint': 'QR ペイロードを貼り付け',
+  'pair.paste': '貼り付け',
+  'pair.submit': 'ペアリングを申請',
+  'pair.networkHint': 'スマートフォンとコンピュータが同じリレーサーバーに到達できることを確認してください',
+  'pair.submitting': 'ペアリング申請を送信中...',
+  'pair.waiting': 'Mac の確認待ち...',
+  'pair.success': 'ペアリング完了、接続中',
+  'pair.scanned': 'QR を読み取りました。タップして申請',
+  'pair.scanTitle': 'Mac のペアリングコードをスキャン',
+  'pair.scanHint': 'QR コードを枠内に入れてください',
+  'pair.close': '閉じる',
+  'settings.title': '設定',
+  'settings.nameLabel': 'デバイス名',
+  'settings.nameHint': 'デバイス名',
+  'settings.useDeviceName': '検出名を使用：{name}',
+  'settings.themeLabel': 'テーマカラー',
+  'settings.localeLabel': '言語',
+  'settings.save': '設定を保存',
+  'settings.saved': '設定を保存しました',
+  'cmd.hint': 'コマンド（予備入力）',
+};
+
+const Map<String, String> _ko = {
+  'app.unbound': '연결된 컴퓨터 없음',
+  'app.connected': '연결됨',
+  'app.notConnected': '연결 안 됨',
+  'app.connecting': '연결 중...',
+  'app.disconnected': '연결 끊김',
+  'app.reconnecting': '연결이 끊겨 백그라운드에서 재시도 중',
+  'app.wsNotConnected': 'WebSocket이 연결되지 않았습니다',
+  'app.connectError': '연결 오류',
+  'app.tapToConnect': '탭하여 연결',
+  'app.addDevice': '컴퓨터 추가',
+  'app.devicesEmpty': '페어링된 컴퓨터가 없습니다',
+  'app.noProjects': '프로젝트 없음',
+  'app.refresh': '새로고침',
+  'app.splits': '분할',
+  'app.splitsEmpty': '터미널이 없습니다. 아래에서 새로 만드세요',
+  'app.newTerminal': '새 터미널',
+  'app.terminal': '터미널',
+  'app.removeDevice': '컴퓨터 제거',
+  'app.removeDeviceConfirm': '{name}을(를) 로컬에서 삭제할까요?\n(Mac에서도 제거해야 합니다)',
+  'app.cancel': '취소',
+  'app.remove': '제거',
+  'app.delete': '삭제',
+  'app.closeSplit': '분할 닫기',
+  'app.closeSplitConfirm': '{name}을(를) 닫을까요?',
+  'app.settings': '설정',
+  'app.checkUpdate': '업데이트 확인',
+  'app.updatePending': '업데이트 확인 기능은 준비 중입니다',
+  'app.about': 'Codux 정보',
+  'app.aboutText':
+      'Codux Mobile은 Codux의 모바일 제어 앱입니다. 자체 호스팅 릴레이로 Mac에 안전하게 연결하고 프로젝트 터미널과 페어링된 컴퓨터를 관리합니다.',
+  'app.github': 'GitHub',
+  'app.licenses': '라이선스',
+  'app.close': '닫기',
+  'toolbar.copyEmpty': '터미널 텍스트를 길게 누르고 드래그해 선택한 뒤 복사하세요',
+  'toolbar.copyDone': '선택한 내용 복사됨',
+  'toolbar.uploadPending': '이미지 업로드에는 모바일→Mac 파일 전송 프로토콜이 필요하며 예약되어 있습니다',
+  'toolbar.voiceUnavailable': '음성 입력을 사용할 수 없음: {reason}',
+  'toolbar.voiceListening': '듣는 중입니다. 인식 후 터미널에 입력됩니다',
+  'file.menuRename': '이름 변경',
+  'file.menuCopyPath': '경로 복사',
+  'file.menuDelete': '삭제',
+  'file.pathCopied': '경로가 복사됨',
+  'file.renamed': '이름 변경됨',
+  'file.deleted': '삭제됨',
+  'file.renameTitle': '이름 변경',
+  'file.renameLabel': '파일 이름',
+  'file.deleteTitle': '파일 삭제',
+  'file.deleteConfirm': '{name}을(를) 삭제할까요?',
+  'file.nameInvalid': '파일 이름에는 / 를 포함할 수 없습니다',
+  'file.cancel': '취소',
+  'file.save': '저장',
+  'file.edit': '편집',
+  'file.readOnlyLarge': '큰 파일은 읽기 전용 모드로 열렸습니다',
+  'file.saved': '파일 저장됨',
+  'pair.title': '컴퓨터 페어링',
+  'pair.tapToScan': '탭하여 카메라 열기',
+  'pair.heading': 'Mac QR 코드 스캔',
+  'pair.subheading': 'Mac에서 Codux ▸ Remote를 열고 스캔하여 페어링하세요',
+  'pair.manualToggleOpen': '코드 직접 입력',
+  'pair.manualToggleClose': '직접 입력 닫기',
+  'pair.manualHint': 'QR 페이로드 붙여넣기',
+  'pair.paste': '붙여넣기',
+  'pair.submit': '페어링 요청',
+  'pair.networkHint': '휴대폰과 컴퓨터가 같은 릴레이 서버에 접근할 수 있어야 합니다',
+  'pair.submitting': '페어링 요청 제출 중...',
+  'pair.waiting': 'Mac 확인 대기 중...',
+  'pair.success': '페어링 완료, 연결 중',
+  'pair.scanned': 'QR을 스캔했습니다. 탭하여 요청하세요',
+  'pair.scanTitle': 'Mac 페어링 코드 스캔',
+  'pair.scanHint': 'QR 코드를 프레임 안에 맞추세요',
+  'pair.close': '닫기',
+  'settings.title': '설정',
+  'settings.nameLabel': '기기 이름',
+  'settings.nameHint': '기기 이름',
+  'settings.useDeviceName': '감지된 이름 사용: {name}',
+  'settings.themeLabel': '테마 색상',
+  'settings.localeLabel': '언어',
+  'settings.save': '설정 저장',
+  'settings.saved': '설정 저장됨',
+  'cmd.hint': '명령어(예비 입력)',
+};
+
+final Map<String, String> _fr = {
+  ..._en,
+  'app.connected': 'Connecté',
+  'app.notConnected': 'Déconnecté',
+  'app.addDevice': 'Ajouter un ordinateur',
+  'app.settings': 'Réglages',
+  'app.about': 'À propos de Codux',
+  'app.cancel': 'Annuler',
+  'app.remove': 'Supprimer',
+  'app.delete': 'Supprimer',
+  'pair.title': 'Associer un ordinateur',
+  'pair.submit': 'Demander l’association',
+  'settings.title': 'Réglages',
+  'settings.nameLabel': 'Nom de l’appareil',
+  'settings.themeLabel': 'Couleur du thème',
+  'settings.localeLabel': 'Langue',
+  'settings.save': 'Enregistrer',
+  'settings.saved': 'Réglages enregistrés',
+};
+
+final Map<String, String> _de = {
+  ..._en,
+  'app.connected': 'Verbunden',
+  'app.notConnected': 'Getrennt',
+  'app.addDevice': 'Computer hinzufügen',
+  'app.settings': 'Einstellungen',
+  'app.about': 'Über Codux',
+  'app.cancel': 'Abbrechen',
+  'app.remove': 'Entfernen',
+  'app.delete': 'Löschen',
+  'pair.title': 'Computer koppeln',
+  'pair.submit': 'Kopplung anfordern',
+  'settings.title': 'Einstellungen',
+  'settings.nameLabel': 'Gerätename',
+  'settings.themeLabel': 'Designfarbe',
+  'settings.localeLabel': 'Sprache',
+  'settings.save': 'Speichern',
+  'settings.saved': 'Einstellungen gespeichert',
+};
+
+final Map<String, String> _es = {
+  ..._en,
+  'app.connected': 'Conectado',
+  'app.notConnected': 'Desconectado',
+  'app.addDevice': 'Añadir ordenador',
+  'app.settings': 'Ajustes',
+  'app.about': 'Acerca de Codux',
+  'app.cancel': 'Cancelar',
+  'app.remove': 'Quitar',
+  'app.delete': 'Eliminar',
+  'pair.title': 'Vincular ordenador',
+  'pair.submit': 'Solicitar vinculación',
+  'settings.title': 'Ajustes',
+  'settings.nameLabel': 'Nombre del dispositivo',
+  'settings.themeLabel': 'Color del tema',
+  'settings.localeLabel': 'Idioma',
+  'settings.save': 'Guardar',
+  'settings.saved': 'Ajustes guardados',
+};
+
+final Map<String, String> _ptBR = {
+  ..._en,
+  'app.connected': 'Conectado',
+  'app.notConnected': 'Desconectado',
+  'app.addDevice': 'Adicionar computador',
+  'app.settings': 'Configurações',
+  'app.about': 'Sobre o Codux',
+  'app.cancel': 'Cancelar',
+  'app.remove': 'Remover',
+  'app.delete': 'Excluir',
+  'pair.title': 'Parear computador',
+  'pair.submit': 'Solicitar pareamento',
+  'settings.title': 'Configurações',
+  'settings.nameLabel': 'Nome do dispositivo',
+  'settings.themeLabel': 'Cor do tema',
+  'settings.localeLabel': 'Idioma',
+  'settings.save': 'Salvar',
+  'settings.saved': 'Configurações salvas',
+};
+
+final Map<String, String> _ru = {
+  ..._en,
+  'app.connected': 'Подключено',
+  'app.notConnected': 'Отключено',
+  'app.addDevice': 'Добавить компьютер',
+  'app.settings': 'Настройки',
+  'app.about': 'О Codux',
+  'app.cancel': 'Отмена',
+  'app.remove': 'Удалить',
+  'app.delete': 'Удалить',
+  'pair.title': 'Подключить компьютер',
+  'pair.submit': 'Запросить сопряжение',
+  'settings.title': 'Настройки',
+  'settings.nameLabel': 'Имя устройства',
+  'settings.themeLabel': 'Цвет темы',
+  'settings.localeLabel': 'Язык',
+  'settings.save': 'Сохранить',
+  'settings.saved': 'Настройки сохранены',
+};
+
+final Map<String, Map<String, String>> _strings = {
+  'simplifiedChinese': _zhCN,
+  'traditionalChinese': _zhTW,
+  'english': _en,
+  'japanese': _ja,
+  'korean': _ko,
+  'french': _fr,
+  'german': _de,
+  'spanish': _es,
+  'portugueseBrazil': _ptBR,
+  'russian': _ru,
+  'zh-CN': _zhCN,
+  'en-US': _en,
+};
+
+String tr(String key, String locale, {Map<String, String>? params}) {
+  final resolvedLocale = _resolveLocale(locale);
+  final raw = _strings[resolvedLocale]?[key] ?? _en[key] ?? _zhCN[key] ?? key;
+  if (params == null) return raw;
+  var result = raw;
+  params.forEach((k, v) => result = result.replaceAll('{$k}', v));
+  return result;
+}
+
+String _resolveLocale(String locale) {
+  final option = LocaleChoices.byId(locale);
+  if (option.id != 'system') return option.id;
+  final platform = ui.PlatformDispatcher.instance.locale;
+  final language = platform.languageCode.toLowerCase();
+  final country = (platform.countryCode ?? '').toLowerCase();
+  final script = (platform.scriptCode ?? '').toLowerCase();
+  if (language == 'zh') {
+    if (script == 'hant' || ['tw', 'hk', 'mo'].contains(country)) {
+      return 'traditionalChinese';
+    }
+    return 'simplifiedChinese';
+  }
+  if (language == 'ja') return 'japanese';
+  if (language == 'ko') return 'korean';
+  if (language == 'fr') return 'french';
+  if (language == 'de') return 'german';
+  if (language == 'es') return 'spanish';
+  if (language == 'pt' && country == 'br') return 'portugueseBrazil';
+  if (language == 'ru') return 'russian';
+  return 'english';
+}
+
+class AppPreferences extends InheritedWidget {
+  const AppPreferences({
+    super.key,
+    required this.accent,
+    required this.locale,
+    required super.child,
+  });
+
+  final AccentOption accent;
+  final LocaleOption locale;
+
+  String t(String key, {Map<String, String>? params}) =>
+      tr(key, locale.id, params: params);
+
+  static AppPreferences of(BuildContext context) {
+    final result = context.dependOnInheritedWidgetOfExactType<AppPreferences>();
+    assert(result != null, 'AppPreferences not found in context');
+    return result!;
+  }
+
+  @override
+  bool updateShouldNotify(AppPreferences oldWidget) =>
+      accent.id != oldWidget.accent.id || locale.id != oldWidget.locale.id;
+}
