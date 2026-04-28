@@ -31,6 +31,10 @@ void main() {
     });
     await tester.pump();
 
+    expect(find.text('同步中'), findsWidgets);
+    _emitHostReady(relay.channels.single);
+    await _pumpUntil(tester, () => find.text('已连接').evaluate().isNotEmpty);
+
     expect(find.text('已连接'), findsWidgets);
     expect(find.text('未连接'), findsNothing);
   });
@@ -59,6 +63,9 @@ void main() {
       'payload': {'role': 'client'},
     });
     await tester.pump();
+    expect(find.text('同步中'), findsWidgets);
+    _emitHostReady(second);
+    await _pumpUntil(tester, () => find.text('已连接').evaluate().isNotEmpty);
     expect(find.text('已连接'), findsWidgets);
 
     first.closeFromServer();
@@ -124,6 +131,21 @@ void main() {
       expect(relay.channels.single.sink.sent.length, greaterThan(initialCount));
     },
   );
+}
+
+void _emitHostReady(_FakeRelayChannel channel) {
+  channel.emit({
+    'type': 'project.list',
+    'payload': {
+      'projects': [
+        {'id': 'project-1', 'name': 'Codux', 'path': '/Volumes/Web/codux'},
+      ],
+    },
+  });
+  channel.emit({
+    'type': 'terminal.list',
+    'payload': {'terminals': []},
+  });
 }
 
 Future<void> _pumpUntil(

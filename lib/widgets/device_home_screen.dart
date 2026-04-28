@@ -104,9 +104,7 @@ class DeviceHomeScreen extends StatelessWidget {
                       final device = devices[index];
                       final isActive = device.deviceId == activeDeviceId;
                       final isConnected = isActive && connected;
-                      final state = isConnected
-                          ? prefs.t('app.connected')
-                          : isActive
+                      final state = isActive
                           ? status
                           : prefs.t('app.notConnected');
                       return _SwipeDeviceTile(
@@ -417,7 +415,6 @@ class _StatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final prefs = AppPreferences.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
@@ -427,7 +424,7 @@ class _StatusPill extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        connected ? prefs.t('app.connected') : prefs.t('app.notConnected'),
+        status,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(

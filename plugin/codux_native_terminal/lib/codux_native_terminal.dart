@@ -50,32 +50,36 @@ class CoduxNativeTerminalController {
   final MethodChannel _methods;
   final EventChannel _events;
   StreamSubscription<dynamic>? _subscription;
+  bool _disposed = false;
 
-  Future<void> write(String data) {
+  Future<void> write(String data) async {
     if (data.isEmpty) return Future.value();
-    return _methods.invokeMethod<void>('write', {'data': data});
+    await _invokeVoid('write', {'data': data});
   }
 
-  Future<void> clear() => _methods.invokeMethod<void>('clear');
+  Future<void> clear() => _invokeVoid('clear');
 
-  Future<void> focusKeyboard() => _methods.invokeMethod<void>('focusKeyboard');
+  Future<void> focusKeyboard() => _invokeVoid('focusKeyboard');
 
-  Future<void> hideKeyboard() => _methods.invokeMethod<void>('hideKeyboard');
+  Future<void> hideKeyboard() => _invokeVoid('hideKeyboard');
 
   Future<void> setScrollEnabled(bool enabled) {
-    return _methods.invokeMethod<void>('setScrollEnabled', {
-      'enabled': enabled,
-    });
+    return _invokeVoid('setScrollEnabled', {'enabled': enabled});
   }
 
   Future<bool> copySelection() async {
-    return await _methods.invokeMethod<bool>('copySelection') ?? false;
+    if (_disposed) return false;
+    try {
+      return await _methods.invokeMethod<bool>('copySelection') ?? false;
+    } on MissingPluginException {
+      return false;
+    }
   }
 
-  Future<void> requestResize() => _methods.invokeMethod<void>('resize');
+  Future<void> requestResize() => _invokeVoid('resize');
 
   Future<void> setLogLevel(String level) {
-    return _methods.invokeMethod<void>('setLogLevel', {'level': level});
+    return _invokeVoid('setLogLevel', {'level': level});
   }
 
   void listen({
@@ -109,8 +113,19 @@ class CoduxNativeTerminalController {
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     await _subscription?.cancel();
     _subscription = null;
+  }
+
+  Future<void> _invokeVoid(String method, [Object? arguments]) async {
+    if (_disposed) return;
+    try {
+      await _methods.invokeMethod<void>(method, arguments);
+    } on MissingPluginException {
+      // Android can destroy and recreate the platform view while delayed UI
+      // callbacks are still pending. The next live view will report its size.
+    }
   }
 }
 

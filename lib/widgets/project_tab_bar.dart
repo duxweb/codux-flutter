@@ -8,6 +8,7 @@ class ProjectTabBar extends StatelessWidget {
     super.key,
     required this.projects,
     required this.selectedId,
+    required this.loading,
     required this.onSelect,
     required this.onRefresh,
     required this.onRebuild,
@@ -15,6 +16,7 @@ class ProjectTabBar extends StatelessWidget {
 
   final List<ProjectInfo> projects;
   final String? selectedId;
+  final bool loading;
   final ValueChanged<ProjectInfo> onSelect;
   final VoidCallback onRefresh;
   final VoidCallback onRebuild;
@@ -38,18 +40,37 @@ class ProjectTabBar extends StatelessWidget {
                   vertical: AppSpacing.s,
                 ),
                 children: [
-                  if (projects.isEmpty)
+                  if (projects.isEmpty || loading)
                     Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
                           horizontal: AppSpacing.s,
                         ),
-                        child: Text(
-                          prefs.t('app.noProjects'),
-                          style: const TextStyle(
-                            color: AppColors.textSubtle,
-                            fontSize: 12,
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (loading)
+                              SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: accent,
+                                ),
+                              ),
+                            if (loading) const SizedBox(width: AppSpacing.xs),
+                            Text(
+                              projects.isEmpty
+                                  ? (loading
+                                        ? prefs.t('app.syncing')
+                                        : prefs.t('app.noProjects'))
+                                  : prefs.t('app.syncing'),
+                              style: const TextStyle(
+                                color: AppColors.textSubtle,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

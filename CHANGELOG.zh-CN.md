@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-04-28
+
+### 修复
+
+- 移动端重连后保持加密消息序号单调递增，避免 Mac Host 将新的 `project.list` 和 `terminal.list` 请求误判为重放消息并丢弃。
+- UI 区分 relay 连接和 Host 快照同步状态，项目/终端快照未返回时显示同步中，不再误报完全已连接。
+- App 回到前台时重新建立连接，避免 Android 暂停/恢复后沿用失效 WebSocket 状态。
+- 忽略 Android 重建终端原生视图后的旧 resize 调用，避免终端视图竞态触发 `MissingPluginException`。
+
 ## [0.1.2] - 2026-04-28
 
 ### 修复
