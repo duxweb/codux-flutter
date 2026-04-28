@@ -96,7 +96,18 @@ class ProjectTabBar extends StatelessWidget {
                       color: AppColors.bgElevated,
                       borderRadius: BorderRadius.circular(AppRadius.sm),
                     ),
-                    child: Icon(Icons.tune_rounded, color: accent, size: 16),
+                    child: Center(
+                      child: loading
+                          ? SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: accent,
+                              ),
+                            )
+                          : Icon(Icons.tune_rounded, color: accent, size: 16),
+                    ),
                   ),
                   onSelected: (value) {
                     if (value == 'refresh') {
