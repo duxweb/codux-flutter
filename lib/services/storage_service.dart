@@ -6,6 +6,7 @@ class StorageService {
   static const devicesKey = 'codux.mobile.devices';
   static const legacyDeviceKey = 'codux.mobile.device';
   static const settingsKey = 'codux.mobile.settings';
+  static const projectCachePrefix = 'codux.mobile.projects';
 
   Future<List<StoredDevice>> loadDevices() async {
     final prefs = await SharedPreferences.getInstance();
@@ -46,4 +47,28 @@ class StorageService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(settingsKey, jsonEncode(settings.toJson()));
   }
+
+  Future<List<ProjectInfo>> loadCachedProjects(StoredDevice device) async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(_projectCacheKey(device));
+    if (value == null || value.isEmpty) return [];
+    final list = jsonDecode(value) as List<dynamic>;
+    return list
+        .map((item) => ProjectInfo.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> saveCachedProjects(
+    StoredDevice device,
+    List<ProjectInfo> projects,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _projectCacheKey(device),
+      jsonEncode(projects.map((item) => item.toJson()).toList()),
+    );
+  }
+
+  String _projectCacheKey(StoredDevice device) =>
+      '$projectCachePrefix.${device.server}.${device.hostId}';
 }

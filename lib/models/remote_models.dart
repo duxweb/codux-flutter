@@ -180,6 +180,12 @@ class ProjectInfo {
     name: '${json['name'] ?? 'Project'}',
     path: json['path']?.toString(),
   );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    if (path != null) 'path': path,
+  };
 }
 
 class TerminalInfo {

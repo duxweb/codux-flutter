@@ -4,9 +4,14 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:codux_flutter/main.dart';
 import 'package:codux_flutter/models/remote_models.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
 
   testWidgets('device home shows connected after relay hello', (tester) async {
     final relay = _FakeRelayFactory();
@@ -62,6 +67,63 @@ void main() {
     expect(find.text('已连接'), findsWidgets);
     expect(find.text('未连接'), findsNothing);
   });
+
+  testWidgets(
+    'opening terminal before project list does not show history loading',
+    (tester) async {
+      final relay = _FakeRelayFactory();
+
+      await tester.pumpWidget(
+        CoduxFlutterApp(
+          relaySocketFactory: relay.call,
+          initialDevices: [_device()],
+        ),
+      );
+      await _pumpUntil(tester, () => relay.channels.isNotEmpty);
+
+      relay.channels.single.emit({
+        'type': 'hello',
+        'payload': {'role': 'client'},
+      });
+      await tester.pump();
+
+      await tester.tap(find.text('Mac').first);
+      await tester.pump();
+
+      expect(find.text('正在加载终端历史...'), findsNothing);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('正在加载终端历史...'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'initial project and terminal list requests retry without reply',
+    (tester) async {
+      final relay = _FakeRelayFactory();
+
+      await tester.pumpWidget(
+        CoduxFlutterApp(
+          relaySocketFactory: relay.call,
+          initialDevices: [_device()],
+        ),
+      );
+      await _pumpUntil(tester, () => relay.channels.isNotEmpty);
+
+      relay.channels.single.emit({
+        'type': 'hello',
+        'payload': {'role': 'client'},
+      });
+      await _pumpUntil(
+        tester,
+        () => relay.channels.single.sink.sent.length >= 4,
+      );
+
+      final initialCount = relay.channels.single.sink.sent.length;
+      await tester.pump(const Duration(milliseconds: 850));
+
+      expect(relay.channels.single.sink.sent.length, greaterThan(initialCount));
+    },
+  );
 }
 
 Future<void> _pumpUntil(

@@ -158,6 +158,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   bool _terminalReady = false;
   bool _terminalBufferLoading = false;
   bool _terminalListLoaded = false;
+  bool _projectListLoaded = false;
   bool _backgroundConnect = false;
   bool _shouldReconnect = true;
   bool _relayReady = false;
@@ -197,6 +198,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _healthTimer;
   Timer? _toastTimer;
   Timer? _filePickerTimeoutTimer;
+  Timer? _projectListRetryTimer;
+  Timer? _terminalListRetryTimer;
+  int _projectListRetryAttempt = 0;
+  int _terminalListRetryAttempt = 0;
 
   bool get _isConnected => _socket != null && _relayReady;
   String _t(String key, {Map<String, String>? params}) =>
@@ -236,6 +241,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _healthTimer?.cancel();
     _toastTimer?.cancel();
     _filePickerTimeoutTimer?.cancel();
+    _projectListRetryTimer?.cancel();
+    _terminalListRetryTimer?.cancel();
     _terminalBufferRetry.dispose();
     _socketSubscription?.cancel();
     _socket?.close();
@@ -257,7 +264,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _activeDevice = initialDevices.isNotEmpty ? initialDevices.first : null;
         _showTerminal = false;
       });
-      if (initialDevices.isNotEmpty) _connect(initialDevices.first, true);
+      if (initialDevices.isNotEmpty) {
+        unawaited(_restoreCachedProjects(initialDevices.first));
+        _connect(initialDevices.first, true);
+      }
       return;
     }
     await _loadDeviceName();
@@ -275,7 +285,29 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _activeDevice = devices.isNotEmpty ? devices.first : null;
       _showTerminal = false;
     });
-    if (devices.isNotEmpty) _connect(devices.first, true);
+    if (devices.isNotEmpty) {
+      unawaited(_restoreCachedProjects(devices.first));
+      _connect(devices.first, true);
+    }
+  }
+
+  Future<void> _restoreCachedProjects(StoredDevice device) async {
+    try {
+      final cached = await _storage.loadCachedProjects(device);
+      if (!mounted ||
+          _activeDevice?.hostId != device.hostId ||
+          _activeDevice?.server != device.server ||
+          cached.isEmpty ||
+          _projects.isNotEmpty) {
+        return;
+      }
+      setState(() {
+        _projects = cached;
+        _selectedProjectId = cached.first.id;
+      });
+    } catch (error) {
+      CoduxLog.warn('[codux-flutter-projects] cache restore failed: $error');
+    }
   }
 
   Future<void> _loadDeviceName() async {
@@ -463,8 +495,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       if (!background) {
         _status = _t('app.connecting');
         _projects = [];
+        _projectListLoaded = false;
         _terminals = [];
         _terminalListLoaded = false;
+        _projectListRetryTimer?.cancel();
+        _terminalListRetryTimer?.cancel();
+        _projectListRetryAttempt = 0;
+        _terminalListRetryAttempt = 0;
         _selectedProjectId = null;
         _sessionId = null;
         _terminalBufferRetry.reset();
@@ -473,6 +510,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       }
       _activeDevice = target;
     });
+    unawaited(_restoreCachedProjects(target));
     try {
       final channel = (widget.relaySocketFactory ?? createRelaySocket)(target);
       final socket = _WebSocketSink(channel);
@@ -560,8 +598,86 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         },
       ),
     );
-    _send(const RelayEnvelope(type: 'project.list'));
-    _send(const RelayEnvelope(type: 'terminal.list'));
+    _requestProjectList(resetRetry: force);
+    _requestTerminalList(resetRetry: force);
+  }
+
+  void _requestProjectList({bool resetRetry = false}) {
+    if (resetRetry) {
+      _projectListRetryTimer?.cancel();
+      _projectListRetryTimer = null;
+      _projectListRetryAttempt = 0;
+      _projectListLoaded = false;
+    }
+    final sent = _send(const RelayEnvelope(type: 'project.list'));
+    if (sent && !_projectListLoaded) {
+      _scheduleProjectListRetry();
+    }
+  }
+
+  void _scheduleProjectListRetry() {
+    if (!_relayReady || _projectListLoaded) return;
+    _projectListRetryTimer?.cancel();
+    if (_projectListRetryAttempt >= 6) return;
+    final delay = Duration(
+      milliseconds: (800 * (1 << _projectListRetryAttempt)).clamp(800, 5000),
+    );
+    _projectListRetryTimer = Timer(delay, () {
+      if (!mounted || !_relayReady || _projectListLoaded) return;
+      _projectListRetryAttempt += 1;
+      _requestProjectList();
+    });
+  }
+
+  void _markProjectListReceived() {
+    _projectListLoaded = true;
+    _projectListRetryAttempt = 0;
+    _projectListRetryTimer?.cancel();
+    _projectListRetryTimer = null;
+  }
+
+  void _requestTerminalList({bool resetRetry = false}) {
+    if (resetRetry) {
+      _terminalListRetryTimer?.cancel();
+      _terminalListRetryTimer = null;
+      _terminalListRetryAttempt = 0;
+      _terminalListLoaded = false;
+    }
+    final sent = _send(const RelayEnvelope(type: 'terminal.list'));
+    if (sent && !_terminalListLoaded) {
+      _scheduleTerminalListRetry();
+    }
+  }
+
+  void _scheduleTerminalListRetry() {
+    if (!_relayReady || _terminalListLoaded) return;
+    _terminalListRetryTimer?.cancel();
+    if (_terminalListRetryAttempt >= 6) return;
+    final delay = Duration(
+      milliseconds: (800 * (1 << _terminalListRetryAttempt)).clamp(800, 5000),
+    );
+    _terminalListRetryTimer = Timer(delay, () {
+      if (!mounted || !_relayReady || _terminalListLoaded) return;
+      _terminalListRetryAttempt += 1;
+      _requestTerminalList();
+    });
+  }
+
+  void _markTerminalListReceived() {
+    _terminalListLoaded = true;
+    _terminalListRetryAttempt = 0;
+    _terminalListRetryTimer?.cancel();
+    _terminalListRetryTimer = null;
+  }
+
+  Future<void> _cacheProjects(List<ProjectInfo> projects) async {
+    final device = _activeDevice;
+    if (device == null) return;
+    try {
+      await _storage.saveCachedProjects(device, projects);
+    } catch (error) {
+      CoduxLog.warn('[codux-flutter-projects] cache save failed: $error');
+    }
   }
 
   bool _send(RelayEnvelope message, [WebSocketSinkLike? target]) {
@@ -669,11 +785,18 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _showTerminal = false;
             _workspaceMode = 'terminal';
             _projects = [];
+            _projectListLoaded = false;
             _terminals = [];
             _terminalListLoaded = false;
+            _projectListRetryTimer?.cancel();
+            _terminalListRetryTimer?.cancel();
+            _projectListRetryAttempt = 0;
+            _terminalListRetryAttempt = 0;
             _selectedProjectId = null;
             _sessionId = null;
             _status = messageText;
+            _terminalBufferRetry.reset();
+            _terminalBufferLoading = false;
           });
           _scheduleReconnect(target);
         case 'secure.required':
@@ -686,6 +809,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _updateDevice(target.deviceId, hostName: '${payload['name']}');
           }
         case 'project.list':
+          _markProjectListReceived();
           final payload = message.payload;
           final list = payload is Map
               ? (payload['projects'] as List<dynamic>? ?? [])
@@ -700,8 +824,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                 ? _selectedProjectId
                 : (next.isNotEmpty ? next.first.id : null);
           });
+          unawaited(_cacheProjects(next));
           _ensureTerminalForSelectedProject();
         case 'terminal.list':
+          _markTerminalListReceived();
           final payload = message.payload;
           final list = payload is Map
               ? (payload['terminals'] as List<dynamic>? ?? [])
@@ -750,7 +876,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               _selectedProjectId = terminal.projectId;
               _creatingTerminalProjectId = null;
               _terminalBufferRetry.reset();
-              _terminalBufferLoading = true;
+              _terminalBufferLoading = false;
             });
             _clearTerminal();
             _flushPendingTerminalResize(force: true);
@@ -1101,8 +1227,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _refreshLists() {
-    _send(const RelayEnvelope(type: 'project.list'));
-    _send(const RelayEnvelope(type: 'terminal.list'));
+    _requestProjectList(resetRetry: true);
+    _requestTerminalList(resetRetry: true);
   }
 
   void _rebuildCurrentTerminal() {
@@ -1146,7 +1272,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     final projectId = _selectedProjectId;
     if (projectId == null) return;
     if (!_terminalListLoaded) {
-      _send(const RelayEnvelope(type: 'terminal.list'));
+      _requestTerminalList();
       return;
     }
     if (_sessionId != null &&
@@ -1166,7 +1292,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       setState(() {
         _sessionId = terminal.id;
         _terminalBufferRetry.reset();
-        _terminalBufferLoading = true;
+        _terminalBufferLoading = false;
         _creatingTerminalProjectId = null;
         _terminalCursorBottom = 0;
       });
@@ -1526,7 +1652,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     setState(() {
       _showTerminal = true;
       _workspaceMode = 'terminal';
-      _terminalBufferLoading = true;
+      _terminalBufferLoading = false;
     });
     _sendInitialRelayRequests(force: true);
     _requestBufferIfReady(force: true);
@@ -1625,7 +1751,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       if (resetTerminal) {
         _sessionId = null;
         _terminalBufferRetry.reset();
-        _terminalBufferLoading = true;
+        _terminalBufferLoading = false;
         _creatingTerminalProjectId = null;
         _terminalCursorBottom = 0;
       }
@@ -2185,7 +2311,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                             ),
                           if (_hasShownTerminal &&
                               _workspaceMode == 'terminal' &&
-                              _terminalBufferLoading)
+                              _terminalBufferLoading &&
+                              _sessionId != null &&
+                              _terminalBufferRetry.pendingSessionId ==
+                                  _sessionId)
                             Positioned.fill(
                               child: IgnorePointer(
                                 child: DecoratedBox(

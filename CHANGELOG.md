@@ -4,6 +4,15 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-04-28
+
+### Fixed
+
+- Retried initial `project.list` and `terminal.list` snapshot requests when the host response is not received, so the mobile project list and terminal session lookup recover from transient dropped messages.
+- Restored the cached project list on app startup and refreshed it after the host returns the latest list.
+- Limited the terminal history loading overlay to active `terminal.buffer` requests for the current session, avoiding a stuck loading state before projects or sessions are available.
+- Added regression coverage for project-list retry, project-list cache storage, and opening the terminal before the project list returns.
+
 ## [0.1.1] - 2026-04-28
 
 ### Added
