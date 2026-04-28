@@ -13,7 +13,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('device home shows connected after relay hello', (tester) async {
+  testWidgets('device home syncs after relay hello before host snapshots', (
+    tester,
+  ) async {
     final relay = _FakeRelayFactory();
 
     await tester.pumpWidget(
