@@ -164,6 +164,10 @@ The release workflow builds `Codux-Mobile-<version>-android.apk`, generates `SHA
 | `scripts/release/` | Release note extraction helpers. |
 | `docs/images/` | Reserved screenshot location. |
 
+## License
+
+Codux Mobile is licensed under the GNU General Public License v3.0, the same license used by Codux for macOS. See `LICENSE` for details.
+
 ## Related Projects
 
 - [Codux for macOS](https://github.com/duxweb/codux)

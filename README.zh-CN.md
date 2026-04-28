@@ -164,6 +164,10 @@ git push origin v1.0.0
 | `scripts/release/` | 更新日志提取脚本。 |
 | `docs/images/` | 截图预留目录。 |
 
+## 开源协议
+
+Codux Mobile 使用 GNU General Public License v3.0，和 macOS 端 Codux 保持一致。详情见 `LICENSE`。
+
 ## 相关项目
 
 - [Codux for macOS](https://github.com/duxweb/codux)
