@@ -1,4 +1,4 @@
-package com.codux.codux_flutter
+package com.duxweb.codux
 
 import io.flutter.embedding.android.FlutterActivity
 
