@@ -1,7 +1,19 @@
-# Codux Mobile
+<h1 align="center">Codux Mobile</h1>
 
 <p align="center">
   <strong>A native mobile companion for the Codux macOS terminal workspace.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/duxweb/codux-flutter/releases">
+    <img src="https://img.shields.io/badge/version-1.0.0-22d3ee?style=flat-square" alt="Version">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-GPLv3-blue?style=flat-square" alt="License">
+  </a>
+  <img src="https://img.shields.io/badge/platform-Android-3ddc84?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/flutter-native%20terminal-02569b?style=flat-square" alt="Flutter">
+  <img src="https://img.shields.io/badge/languages-EN%20%7C%20ZH-lightgrey?style=flat-square" alt="Languages">
 </p>
 
 <p align="center">

@@ -1,7 +1,19 @@
-# Codux Mobile
+<h1 align="center">Codux Mobile</h1>
 
 <p align="center">
   <strong>Codux macOS 终端工作台的原生移动端客户端。</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/duxweb/codux-flutter/releases">
+    <img src="https://img.shields.io/badge/版本-1.0.0-22d3ee?style=flat-square" alt="版本">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/协议-GPLv3-blue?style=flat-square" alt="开源协议">
+  </a>
+  <img src="https://img.shields.io/badge/平台-Android-3ddc84?style=flat-square" alt="平台">
+  <img src="https://img.shields.io/badge/Flutter-原生终端-02569b?style=flat-square" alt="Flutter">
+  <img src="https://img.shields.io/badge/语言-中文%20%7C%20English-lightgrey?style=flat-square" alt="语言">
 </p>
 
 <p align="center">
