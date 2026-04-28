@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../i18n.dart';
 import '../theme/app_theme.dart';
 
 class Toolbar extends StatefulWidget {
@@ -80,6 +81,7 @@ class _ToolbarState extends State<Toolbar> {
 
   @override
   Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
     final row1 = [
       _ToolItem(
         label: 'esc',
@@ -106,7 +108,7 @@ class _ToolbarState extends State<Toolbar> {
       ),
       _ToolItem(
         icon: Icons.upload_file_rounded,
-        label: '上传',
+        label: prefs.t('toolbar.upload'),
         kind: _ToolKind.special,
         onTap: widget.onUpload,
       ),
@@ -126,7 +128,7 @@ class _ToolbarState extends State<Toolbar> {
       ),
       _ToolItem(
         icon: Icons.keyboard_return_rounded,
-        label: '回车',
+        label: prefs.t('toolbar.enter'),
         kind: _ToolKind.enter,
         onTap: () => _send('\r'),
       ),
@@ -180,7 +182,7 @@ class _ToolbarState extends State<Toolbar> {
         icon: widget.keyboardVisible
             ? Icons.keyboard_hide_rounded
             : Icons.keyboard_rounded,
-        label: '键盘',
+        label: prefs.t('toolbar.keyboard'),
         kind: _ToolKind.special,
         onTap: widget.onToggleKeyboard,
       ),

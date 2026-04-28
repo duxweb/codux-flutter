@@ -27,9 +27,7 @@ class DropdownOverlay extends StatelessWidget {
             children: [
               Positioned(
                 top: top,
-                left: alignment == Alignment.topRight
-                    ? null
-                    : AppSpacing.m,
+                left: alignment == Alignment.topRight ? null : AppSpacing.m,
                 right: AppSpacing.m,
                 child: GestureDetector(
                   onTap: () {},

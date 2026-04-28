@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../i18n.dart';
 import '../models/remote_models.dart';
 import '../theme/app_theme.dart';
 
@@ -21,6 +22,7 @@ class ProjectTabBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
+    final prefs = AppPreferences.of(context);
     return Material(
       color: AppColors.bgSurface,
       child: Container(
@@ -37,12 +39,14 @@ class ProjectTabBar extends StatelessWidget {
                 ),
                 children: [
                   if (projects.isEmpty)
-                    const Center(
+                    Center(
                       child: Padding(
-                        padding: EdgeInsets.symmetric(horizontal: AppSpacing.s),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.s,
+                        ),
                         child: Text(
-                          '暂无项目',
-                          style: TextStyle(
+                          prefs.t('app.noProjects'),
+                          style: const TextStyle(
                             color: AppColors.textSubtle,
                             fontSize: 12,
                           ),
@@ -78,21 +82,14 @@ class ProjectTabBar extends StatelessWidget {
                   elevation: 12,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppRadius.md),
-                    side: const BorderSide(
-                      color: AppColors.border,
-                      width: 0.5,
-                    ),
+                    side: const BorderSide(color: AppColors.border, width: 0.5),
                   ),
                   child: Container(
                     decoration: BoxDecoration(
                       color: AppColors.bgElevated,
                       borderRadius: BorderRadius.circular(AppRadius.sm),
                     ),
-                    child: Icon(
-                      Icons.tune_rounded,
-                      color: accent,
-                      size: 16,
-                    ),
+                    child: Icon(Icons.tune_rounded, color: accent, size: 16),
                   ),
                   onSelected: (value) {
                     if (value == 'refresh') {
@@ -103,13 +100,13 @@ class ProjectTabBar extends StatelessWidget {
                       onRebuild();
                     }
                   },
-                  itemBuilder: (context) => const [
+                  itemBuilder: (context) => [
                     PopupMenuItem(
                       value: 'refresh',
                       height: 40,
                       child: _ProjectMenuItem(
                         icon: Icons.refresh_rounded,
-                        label: '刷新',
+                        label: prefs.t('app.refresh'),
                       ),
                     ),
                     PopupMenuItem(
@@ -117,7 +114,7 @@ class ProjectTabBar extends StatelessWidget {
                       height: 40,
                       child: _ProjectMenuItem(
                         icon: Icons.restart_alt_rounded,
-                        label: '重建终端',
+                        label: prefs.t('project.rebuildTerminal'),
                       ),
                     ),
                   ],

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../i18n.dart';
 import '../models/remote_models.dart';
 import '../theme/app_theme.dart';
 
@@ -17,6 +18,7 @@ class AIStatsSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
+    final prefs = AppPreferences.of(context);
     return Positioned.fill(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -74,9 +76,9 @@ class AIStatsSheet extends StatelessWidget {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            const Text(
-                              'AI 统计',
-                              style: TextStyle(
+                            Text(
+                              prefs.t('stats.aiTitle'),
+                              style: const TextStyle(
                                 color: AppColors.textMuted,
                                 fontSize: AppTextSize.small,
                               ),
@@ -97,32 +99,38 @@ class AIStatsSheet extends StatelessWidget {
                     runSpacing: AppSpacing.s,
                     children: [
                       _Metric(
-                        label: '今日 Token',
+                        label: prefs.t('stats.todayToken'),
                         value: _formatInt(stats.todayTokens),
                         accent: accent,
                       ),
                       _Metric(
-                        label: '总 Token',
+                        label: prefs.t('stats.totalToken'),
                         value: _formatInt(stats.totalTokens),
                         accent: accent,
                       ),
                       _Metric(
-                        label: '当前会话',
+                        label: prefs.t('stats.currentSession'),
                         value: _formatInt(stats.currentSessionTokens),
                         accent: accent,
                       ),
                       _Metric(
-                        label: '请求数',
+                        label: prefs.t('stats.requests'),
                         value: _formatInt(stats.requestCount),
                         accent: accent,
                       ),
                     ],
                   ),
                   const SizedBox(height: AppSpacing.m),
-                  _MetaLine(label: '工具', value: stats.currentTool ?? '-'),
-                  _MetaLine(label: '模型', value: stats.currentModel ?? '-'),
                   _MetaLine(
-                    label: '上下文',
+                    label: prefs.t('stats.tool'),
+                    value: stats.currentTool ?? '-',
+                  ),
+                  _MetaLine(
+                    label: prefs.t('stats.model'),
+                    value: stats.currentModel ?? '-',
+                  ),
+                  _MetaLine(
+                    label: prefs.t('stats.context'),
                     value: stats.contextUsagePercent == null
                         ? '-'
                         : '${stats.contextUsagePercent!.toStringAsFixed(1)}%',

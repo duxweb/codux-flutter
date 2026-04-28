@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../i18n.dart';
 import '../models/remote_models.dart';
 import '../theme/app_theme.dart';
 import 'more_menu.dart';
@@ -40,6 +41,7 @@ class DeviceHomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
+    final prefs = AppPreferences.of(context);
     return Container(
       color: AppColors.bgBase,
       padding: EdgeInsets.fromLTRB(
@@ -54,12 +56,12 @@ class DeviceHomeScreen extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const Expanded(
+              Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       'Codux',
                       style: TextStyle(
                         color: AppColors.textPrimary,
@@ -68,10 +70,10 @@ class DeviceHomeScreen extends StatelessWidget {
                         fontWeight: FontWeight.w900,
                       ),
                     ),
-                    SizedBox(height: 4),
+                    const SizedBox(height: 4),
                     Text(
-                      '选择已连接的电脑进入终端',
-                      style: TextStyle(
+                      prefs.t('device.homeHint'),
+                      style: const TextStyle(
                         color: AppColors.textMuted,
                         fontSize: 12,
                         height: 1,
@@ -103,10 +105,10 @@ class DeviceHomeScreen extends StatelessWidget {
                       final isActive = device.deviceId == activeDeviceId;
                       final isConnected = isActive && connected;
                       final state = isConnected
-                          ? '已连接'
+                          ? prefs.t('app.connected')
                           : isActive
                           ? status
-                          : '未连接';
+                          : prefs.t('app.notConnected');
                       return _SwipeDeviceTile(
                         device: device,
                         connected: isConnected,
@@ -133,7 +135,7 @@ class DeviceHomeScreen extends StatelessWidget {
               ),
               onPressed: onAdd,
               icon: const Icon(Icons.add, size: 18),
-              label: const Text('扫码添加电脑'),
+              label: Text(prefs.t('device.addByScan')),
             ),
           ),
         ],
@@ -169,33 +171,39 @@ class _EmptyDeviceState extends StatelessWidget {
   final VoidCallback onAdd;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.devices_other_outlined, size: 48, color: accent),
-        const SizedBox(height: AppSpacing.m),
-        const Text(
-          '还没有绑定电脑',
-          style: TextStyle(
-            color: AppColors.textPrimary,
-            fontSize: AppTextSize.title,
-            fontWeight: FontWeight.w700,
+  Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.devices_other_outlined, size: 48, color: accent),
+          const SizedBox(height: AppSpacing.m),
+          Text(
+            prefs.t('device.emptyTitle'),
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: AppTextSize.title,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.s),
-        const Text(
-          '扫码绑定 Mac 后即可远程控制终端',
-          style: TextStyle(
-            color: AppColors.textMuted,
-            fontSize: AppTextSize.small,
+          const SizedBox(height: AppSpacing.s),
+          Text(
+            prefs.t('device.emptySubtitle'),
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: AppTextSize.small,
+            ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.l),
-        FilledButton(onPressed: onAdd, child: const Text('扫码添加')),
-      ],
-    ),
-  );
+          const SizedBox(height: AppSpacing.l),
+          FilledButton(
+            onPressed: onAdd,
+            child: Text(prefs.t('device.scanAdd')),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _SwipeDeviceTile extends StatefulWidget {
@@ -233,6 +241,7 @@ class _SwipeDeviceTileState extends State<_SwipeDeviceTile> {
 
   @override
   Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
     final title = widget.device.hostName?.isNotEmpty == true
         ? widget.device.hostName!
         : widget.device.name;
@@ -251,7 +260,7 @@ class _SwipeDeviceTileState extends State<_SwipeDeviceTile> {
                     children: [
                       Expanded(
                         child: _ActionButton(
-                          label: '编辑',
+                          label: prefs.t('device.edit'),
                           color: widget.accent.withValues(alpha: 0.16),
                           textColor: widget.accent,
                           onTap: widget.onEdit,
@@ -259,7 +268,7 @@ class _SwipeDeviceTileState extends State<_SwipeDeviceTile> {
                       ),
                       Expanded(
                         child: _ActionButton(
-                          label: '删除',
+                          label: prefs.t('device.delete'),
                           color: AppColors.danger.withValues(alpha: 0.16),
                           textColor: AppColors.danger,
                           onTap: widget.onDelete,
@@ -407,23 +416,26 @@ class _StatusPill extends StatelessWidget {
   final Color accent;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-    decoration: BoxDecoration(
-      color: connected
-          ? AppColors.success.withValues(alpha: 0.14)
-          : AppColors.bgElevated,
-      borderRadius: BorderRadius.circular(999),
-    ),
-    child: Text(
-      connected ? '已连接' : '未连接',
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        color: connected ? AppColors.success : AppColors.textMuted,
-        fontSize: AppTextSize.small,
-        fontWeight: FontWeight.w700,
+  Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: connected
+            ? AppColors.success.withValues(alpha: 0.14)
+            : AppColors.bgElevated,
+        borderRadius: BorderRadius.circular(999),
       ),
-    ),
-  );
+      child: Text(
+        connected ? prefs.t('app.connected') : prefs.t('app.notConnected'),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: connected ? AppColors.success : AppColors.textMuted,
+          fontSize: AppTextSize.small,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
 }

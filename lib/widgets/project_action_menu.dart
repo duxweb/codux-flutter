@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../i18n.dart';
 import '../theme/app_theme.dart';
 
 class ProjectActionMenu extends StatelessWidget {
@@ -15,6 +16,7 @@ class ProjectActionMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
     return SizedBox(
       width: 44,
       height: 44,
@@ -47,23 +49,29 @@ class ProjectActionMenu extends StatelessWidget {
               break;
           }
         },
-        itemBuilder: (context) => const [
+        itemBuilder: (context) => [
           PopupMenuItem<String>(
             value: 'edit',
             height: 40,
-            child: _MenuRow(icon: Icons.edit_outlined, label: '修改项目'),
+            child: _MenuRow(
+              icon: Icons.edit_outlined,
+              label: prefs.t('project.edit'),
+            ),
           ),
           PopupMenuItem<String>(
             value: 'add',
             height: 40,
-            child: _MenuRow(icon: Icons.add_box_outlined, label: '添加项目'),
+            child: _MenuRow(
+              icon: Icons.add_box_outlined,
+              label: prefs.t('project.add'),
+            ),
           ),
           PopupMenuItem<String>(
             value: 'remove',
             height: 40,
             child: _MenuRow(
               icon: Icons.delete_outline,
-              label: '移除项目',
+              label: prefs.t('project.remove'),
               danger: true,
             ),
           ),

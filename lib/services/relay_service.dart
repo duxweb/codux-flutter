@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import '../i18n.dart';
 import '../models/remote_models.dart';
 
 PairingPayload parsePairingPayload(String input) {
@@ -16,7 +17,7 @@ PairingPayload parsePairingPayload(String input) {
       code.isEmpty ||
       secret == null ||
       secret.isEmpty) {
-    throw Exception('二维码内容缺少 server/code/secret，请重新扫描 Mac 端二维码');
+    throw Exception(tr('relay.qrMissingFields', LocaleChoices.system.id));
   }
   return PairingPayload(
     server: server,
@@ -28,7 +29,9 @@ PairingPayload parsePairingPayload(String input) {
 
 Map<String, dynamic> _decodePairingPayload(String input) {
   final value = input.trim();
-  if (value.isEmpty) throw Exception('二维码内容为空');
+  if (value.isEmpty) {
+    throw Exception(tr('relay.qrEmpty', LocaleChoices.system.id));
+  }
   for (final candidate in [value, _tryBase64Decode(value)]) {
     if (candidate == null || candidate.isEmpty) continue;
     try {
@@ -37,7 +40,7 @@ Map<String, dynamic> _decodePairingPayload(String input) {
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
     } catch (_) {}
   }
-  throw Exception('无法识别二维码内容，请扫描 Mac 端最新配对码');
+  throw Exception(tr('relay.qrInvalid', LocaleChoices.system.id));
 }
 
 String? _tryBase64Decode(String value) {
@@ -68,7 +71,14 @@ Future<Map<String, dynamic>> postJson(
       ? <String, dynamic>{}
       : (jsonDecode(response.body) as Map<String, dynamic>);
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw Exception(data['error']?.toString() ?? '请求失败 ${response.statusCode}');
+    throw Exception(
+      data['error']?.toString() ??
+          tr(
+            'relay.requestFailed',
+            LocaleChoices.system.id,
+            params: {'status': '${response.statusCode}'},
+          ),
+    );
   }
   return data;
 }
@@ -82,15 +92,24 @@ Future<void> claimPairing(PairingPayload payload, String name) async {
   });
 }
 
+class PairingCancelledException implements Exception {
+  const PairingCancelledException();
+  @override
+  String toString() => tr('pair.cancelled', LocaleChoices.system.id);
+}
+
 Future<StoredDevice> waitPairingConfirmed(
   PairingPayload payload,
-  String name,
-) async {
+  String name, {
+  bool Function()? isCancelled,
+}) async {
   for (var index = 0; index < 90; index += 1) {
+    if (isCancelled?.call() == true) throw const PairingCancelledException();
     final status = await postJson(payload.server, '/api/pairings/status', {
       'code': payload.code,
       'secret': payload.secret,
     });
+    if (isCancelled?.call() == true) throw const PairingCancelledException();
     if (status['status'] == 'confirmed' &&
         status['deviceId'] != null &&
         status['token'] != null) {
@@ -103,9 +122,12 @@ Future<StoredDevice> waitPairingConfirmed(
         hostName: status['hostName']?.toString() ?? payload.hostName,
       );
     }
-    await Future<void>.delayed(const Duration(seconds: 2));
+    for (var step = 0; step < 20; step += 1) {
+      if (isCancelled?.call() == true) throw const PairingCancelledException();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
   }
-  throw Exception('等待 Mac 确认超时');
+  throw Exception(tr('relay.waitTimeout', LocaleChoices.system.id));
 }
 
 WebSocketChannel createRelaySocket(StoredDevice device) {

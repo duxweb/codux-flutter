@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../i18n.dart';
 import '../theme/app_theme.dart';
 
 class ProjectFormOverlay extends StatelessWidget {
@@ -26,6 +27,7 @@ class ProjectFormOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
+    final prefs = AppPreferences.of(context);
     return Positioned.fill(
       child: Material(
         color: AppColors.bgBase,
@@ -62,7 +64,7 @@ class ProjectFormOverlay extends StatelessWidget {
                   TextButton(
                     style: TextButton.styleFrom(foregroundColor: accent),
                     onPressed: onSave,
-                    child: const Text('保存'),
+                    child: Text(prefs.t('common.save')),
                   ),
                 ],
               ),
@@ -77,15 +79,15 @@ class ProjectFormOverlay extends StatelessWidget {
                   bottomInset + AppSpacing.xxl,
                 ),
                 children: [
-                  _Label('项目名称'),
+                  _Label(prefs.t('project.nameLabel')),
                   const SizedBox(height: AppSpacing.s),
                   _Field(
                     controller: nameController,
-                    hint: '例如 healthy-api',
+                    hint: prefs.t('project.nameHint'),
                     accent: accent,
                   ),
                   const SizedBox(height: AppSpacing.l),
-                  _Label('项目路径'),
+                  _Label(prefs.t('project.pathLabel')),
                   const SizedBox(height: AppSpacing.s),
                   _PathField(
                     controller: pathController,
@@ -93,9 +95,9 @@ class ProjectFormOverlay extends StatelessWidget {
                     onChoosePath: onChoosePath,
                   ),
                   const SizedBox(height: AppSpacing.m),
-                  const Text(
-                    '路径可以从 Home、/Volumes 或根目录中选择。保存后 Mac 端项目列表会同步刷新。',
-                    style: TextStyle(
+                  Text(
+                    prefs.t('project.pathHint'),
+                    style: const TextStyle(
                       color: AppColors.textMuted,
                       fontSize: AppTextSize.small,
                       height: 1.35,
@@ -207,7 +209,7 @@ class _PathField extends StatelessWidget {
           style: TextButton.styleFrom(foregroundColor: accent),
           onPressed: onChoosePath,
           icon: const Icon(Icons.folder_open_rounded, size: 18),
-          label: const Text('选择'),
+          label: Text(AppPreferences.of(context).t('common.select')),
         ),
         const SizedBox(width: AppSpacing.xs),
       ],

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../i18n.dart';
 import '../models/remote_models.dart';
 import '../theme/app_theme.dart';
 
@@ -37,6 +38,7 @@ class RemoteFilePicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
+    final prefs = AppPreferences.of(context);
     return Positioned.fill(
       child: Material(
         color: AppColors.bgBase,
@@ -87,13 +89,16 @@ class RemoteFilePicker extends StatelessWidget {
                       if (value == 'root') onOpenRoot();
                       if (value == 'volumes') onOpenVolumes();
                     },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'home', child: Text('Home')),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(value: 'home', child: Text('Home')),
                       PopupMenuItem(
                         value: 'volumes',
-                        child: Text('磁盘 /Volumes'),
+                        child: Text(prefs.t('storage.volumes')),
                       ),
-                      PopupMenuItem(value: 'root', child: Text('根目录 /')),
+                      PopupMenuItem(
+                        value: 'root',
+                        child: Text(prefs.t('storage.root')),
+                      ),
                     ],
                   ),
                 ],
@@ -188,59 +193,62 @@ class _FileRow extends StatelessWidget {
   final VoidCallback? onTrailingTap;
 
   @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.l,
-        vertical: AppSpacing.m,
-      ),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            color: onTap == null ? AppColors.textSubtle : accent,
-            size: 22,
-          ),
-          const SizedBox(width: AppSpacing.m),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: AppTextSize.body,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  path,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.textSubtle,
-                    fontSize: AppTextSize.small,
-                  ),
-                ),
-              ],
+  Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.l,
+          vertical: AppSpacing.m,
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              color: onTap == null ? AppColors.textSubtle : accent,
+              size: 22,
             ),
-          ),
-          if (onTrailingTap != null)
-            TextButton(
-              onPressed: onTrailingTap,
-              style: TextButton.styleFrom(foregroundColor: accent),
-              child: const Text(
-                '选择',
-                style: TextStyle(fontSize: AppTextSize.body),
+            const SizedBox(width: AppSpacing.m),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: AppTextSize.body,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    path,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.textSubtle,
+                      fontSize: AppTextSize.small,
+                    ),
+                  ),
+                ],
               ),
             ),
-        ],
+            if (onTrailingTap != null)
+              TextButton(
+                onPressed: onTrailingTap,
+                style: TextButton.styleFrom(foregroundColor: accent),
+                child: Text(
+                  prefs.t('common.select'),
+                  style: const TextStyle(fontSize: AppTextSize.body),
+                ),
+              ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

@@ -38,6 +38,7 @@ class ProjectFilesPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
+    final prefs = AppPreferences.of(context);
     return ColoredBox(
       color: AppColors.bgBase,
       child: Column(
@@ -55,7 +56,7 @@ class ProjectFilesPanel extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    path.isEmpty ? '当前项目目录' : path,
+                    path.isEmpty ? prefs.t('project.currentDir') : path,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -72,10 +73,16 @@ class ProjectFilesPanel extends StatelessWidget {
                     if (value == 'root') onOpenRoot();
                     if (value == 'volumes') onOpenVolumes();
                   },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'home', child: Text('Home')),
-                    PopupMenuItem(value: 'volumes', child: Text('磁盘 /Volumes')),
-                    PopupMenuItem(value: 'root', child: Text('根目录 /')),
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'home', child: Text('Home')),
+                    PopupMenuItem(
+                      value: 'volumes',
+                      child: Text(prefs.t('storage.volumes')),
+                    ),
+                    PopupMenuItem(
+                      value: 'root',
+                      child: Text(prefs.t('storage.root')),
+                    ),
                   ],
                 ),
                 SizedBox(
@@ -106,7 +113,7 @@ class ProjectFilesPanel extends StatelessWidget {
                       if (parent != null && index == 0) {
                         return _ProjectFileRow(
                           icon: Icons.arrow_upward_rounded,
-                          name: '返回上一级',
+                          name: prefs.t('project.parentDir'),
                           path: parent!,
                           accent: accent,
                           onTap: () => onOpenPath(parent!),

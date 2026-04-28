@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import '../i18n.dart';
 import '../models/remote_models.dart';
 import '../theme/app_theme.dart';
 
@@ -19,6 +20,7 @@ class AIStatsPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
+    final prefs = AppPreferences.of(context);
     if (loading && stats == null) {
       return ColoredBox(
         color: AppColors.bgBase,
@@ -50,21 +52,38 @@ class AIStatsPanel extends StatelessWidget {
                 children: [
                   Expanded(
                     child: _MetricTile(
-                      label: '当前项目',
+                      label: prefs.t('stats.currentProject'),
                       value: _formatInt(data.totalTokens),
                       subValue: data.projectCachedInputTokens > 0
-                          ? '缓存 ${_formatInt(data.projectCachedInputTokens)}'
-                          : '${data.requestCount} 次请求',
+                          ? prefs.t(
+                              'stats.cached',
+                              params: {
+                                'value': _formatInt(
+                                  data.projectCachedInputTokens,
+                                ),
+                              },
+                            )
+                          : prefs.t(
+                              'stats.requestCount',
+                              params: {'count': '${data.requestCount}'},
+                            ),
                       accent: accent,
                     ),
                   ),
                   const SizedBox(width: AppSpacing.s),
                   Expanded(
                     child: _MetricTile(
-                      label: '今日总量',
+                      label: prefs.t('stats.todayTotal'),
                       value: _formatInt(data.todayTokens),
                       subValue: data.todayCachedInputTokens > 0
-                          ? '缓存 ${_formatInt(data.todayCachedInputTokens)}'
+                          ? prefs.t(
+                              'stats.cached',
+                              params: {
+                                'value': _formatInt(
+                                  data.todayCachedInputTokens,
+                                ),
+                              },
+                            )
                           : 'Token',
                       accent: accent,
                     ),
@@ -77,14 +96,14 @@ class AIStatsPanel extends StatelessWidget {
               _HeatmapCard(days: data.heatmap, accent: accent),
               const SizedBox(height: AppSpacing.m),
               _RankingCard(
-                title: '工具排行',
+                title: prefs.t('stats.toolRank'),
                 icon: Icons.auto_awesome_rounded,
                 items: data.toolBreakdown,
                 accent: accent,
               ),
               const SizedBox(height: AppSpacing.m),
               _RankingCard(
-                title: '模型排行',
+                title: prefs.t('stats.modelRank'),
                 icon: Icons.memory_rounded,
                 items: data.modelBreakdown,
                 accent: accent,
@@ -111,43 +130,45 @@ class _MetricTile extends StatelessWidget {
   final Color accent;
 
   @override
-  Widget build(BuildContext context) => _PanelCard(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: AppColors.textMuted,
-            fontSize: AppTextSize.small,
+  Widget build(BuildContext context) {
+    return _PanelCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: AppTextSize.small,
+            ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.s),
-        Text(
-          value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppColors.textPrimary,
-            fontSize: 22,
-            height: 1.05,
-            fontWeight: FontWeight.w700,
-            letterSpacing: -0.4,
+          const SizedBox(height: AppSpacing.s),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 22,
+              height: 1.05,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.4,
+            ),
           ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          subValue,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppColors.textSubtle,
-            fontSize: AppTextSize.small,
+          const SizedBox(height: 2),
+          Text(
+            subValue,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppColors.textSubtle,
+              fontSize: AppTextSize.small,
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 class _TodayBarsCard extends StatefulWidget {
@@ -165,13 +186,13 @@ class _TodayBarsCardState extends State<_TodayBarsCard> {
 
   @override
   Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
     final visible = _normalizedTodayBuckets(widget.buckets);
     final maxValue = visible.fold<int>(
       0,
       (max, item) => math.max(max, item.totalTokens),
     );
-    final selected =
-        _selectedIndex != null && _selectedIndex! < visible.length
+    final selected = _selectedIndex != null && _selectedIndex! < visible.length
         ? visible[_selectedIndex!]
         : null;
     return _PanelCard(
@@ -179,10 +200,17 @@ class _TodayBarsCardState extends State<_TodayBarsCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _SectionTitle(
-            title: '今日用量',
+            title: prefs.t('stats.todayUsage'),
             trailing: selected == null
-                ? '点击柱状图查看明细'
-                : '${_formatTimeLabel(selected.start)} · ${_formatInt(selected.totalTokens)} · ${selected.requestCount} 次',
+                ? prefs.t('stats.tapBarHint')
+                : prefs.t(
+                    'stats.bucketDetail',
+                    params: {
+                      'time': _formatTimeLabel(selected.start),
+                      'tokens': _formatInt(selected.totalTokens),
+                      'count': '${selected.requestCount}',
+                    },
+                  ),
             accent: widget.accent,
           ),
           const SizedBox(height: AppSpacing.m),
@@ -213,12 +241,12 @@ class _TodayBarsCardState extends State<_TodayBarsCard> {
             ),
           ),
           const SizedBox(height: AppSpacing.s),
-          const Row(
+          Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('00:00', style: _mutedLabel),
-              Text('12:00', style: _mutedLabel),
-              Text('现在', style: _mutedLabel),
+              const Text('00:00', style: _mutedLabel),
+              const Text('12:00', style: _mutedLabel),
+              Text(prefs.t('stats.now'), style: _mutedLabel),
             ],
           ),
         ],
@@ -268,9 +296,7 @@ class _TokenBar extends StatelessWidget {
         decoration: BoxDecoration(
           color: highlighted ? accent : base,
           borderRadius: BorderRadius.circular(4),
-          border: highlighted
-              ? Border.all(color: accent, width: 1.4)
-              : null,
+          border: highlighted ? Border.all(color: accent, width: 1.4) : null,
         ),
       ),
     );
@@ -292,13 +318,13 @@ class _HeatmapCardState extends State<_HeatmapCard> {
 
   @override
   Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
     final visible = _normalizedHeatmap(widget.days);
     final maxValue = visible.fold<int>(
       0,
       (max, item) => math.max(max, item.totalTokens),
     );
-    final selected =
-        _selectedIndex != null && _selectedIndex! < visible.length
+    final selected = _selectedIndex != null && _selectedIndex! < visible.length
         ? visible[_selectedIndex!]
         : null;
     return _PanelCard(
@@ -306,10 +332,17 @@ class _HeatmapCardState extends State<_HeatmapCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _SectionTitle(
-            title: '近期用量',
+            title: prefs.t('stats.recentUsage'),
             trailing: selected == null
-                ? '最近 28 天'
-                : '${_formatDayLabel(selected.day)} · ${_formatInt(selected.totalTokens)} · ${selected.requestCount} 次',
+                ? prefs.t('stats.last28Days')
+                : prefs.t(
+                    'stats.dayDetail',
+                    params: {
+                      'day': _formatDayLabel(selected.day),
+                      'tokens': _formatInt(selected.totalTokens),
+                      'count': '${selected.requestCount}',
+                    },
+                  ),
             accent: widget.accent,
           ),
           const SizedBox(height: AppSpacing.m),
@@ -344,8 +377,9 @@ class _HeatmapCardState extends State<_HeatmapCard> {
                                   accent: widget.accent,
                                   selectedIndex: _selectedIndex,
                                   onTap: (i) => setState(
-                                    () => _selectedIndex =
-                                        _selectedIndex == i ? null : i,
+                                    () => _selectedIndex = _selectedIndex == i
+                                        ? null
+                                        : i,
                                   ),
                                 ),
                               ),
@@ -427,6 +461,7 @@ class _RankingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
     final visible = items.take(6).toList(growable: false);
     final maxValue = visible.fold<int>(
       0,
@@ -455,11 +490,11 @@ class _RankingCard extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.l),
           if (visible.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: AppSpacing.s),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.s),
               child: Text(
-                '暂无排行数据',
-                style: TextStyle(
+                prefs.t('stats.noRankData'),
+                style: const TextStyle(
                   color: AppColors.textMuted,
                   fontSize: AppTextSize.body,
                 ),
@@ -622,33 +657,36 @@ class _EmptyStats extends StatelessWidget {
   final VoidCallback onRefresh;
 
   @override
-  Widget build(BuildContext context) => _PanelCard(
-    child: Column(
-      children: [
-        Icon(Icons.query_stats_rounded, color: accent, size: 32),
-        const SizedBox(height: AppSpacing.m),
-        const Text(
-          '暂无统计数据',
-          style: TextStyle(
-            color: AppColors.textPrimary,
-            fontSize: AppTextSize.title,
-            fontWeight: FontWeight.w600,
+  Widget build(BuildContext context) {
+    final prefs = AppPreferences.of(context);
+    return _PanelCard(
+      child: Column(
+        children: [
+          Icon(Icons.query_stats_rounded, color: accent, size: 32),
+          const SizedBox(height: AppSpacing.m),
+          Text(
+            prefs.t('stats.noStats'),
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: AppTextSize.title,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.s),
-        const Text(
-          '运行 Codex / Claude / Gemini 后可在这里查看当前项目统计。',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: AppColors.textMuted,
-            fontSize: AppTextSize.body,
+          const SizedBox(height: AppSpacing.s),
+          Text(
+            prefs.t('stats.emptyHint'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: AppTextSize.body,
+            ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.l),
-        TextButton(onPressed: onRefresh, child: const Text('刷新')),
-      ],
-    ),
-  );
+          const SizedBox(height: AppSpacing.l),
+          TextButton(onPressed: onRefresh, child: Text(prefs.t('app.refresh'))),
+        ],
+      ),
+    );
+  }
 }
 
 const _mutedLabel = TextStyle(

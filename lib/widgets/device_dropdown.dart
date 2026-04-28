@@ -56,11 +56,7 @@ class DeviceDropdown extends StatelessWidget {
               onTap: () => onSelect(device),
               onLongPress: () => onLongPress(device),
             ),
-          const Divider(
-            color: AppColors.border,
-            height: 0.5,
-            thickness: 0.5,
-          ),
+          const Divider(color: AppColors.border, height: 0.5, thickness: 0.5),
           InkWell(
             onTap: onAdd,
             child: Padding(

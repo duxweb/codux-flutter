@@ -12,7 +12,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:codux_native_terminal/codux_native_terminal.dart';
 import 'i18n.dart';
 import 'models/remote_models.dart';
-import 'screens/pairing_screen.dart';
 import 'screens/scanner_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/log_service.dart';
@@ -23,6 +22,7 @@ import 'widgets/ai_stats_panel.dart';
 import 'widgets/app_toast.dart';
 import 'widgets/connect_hint.dart';
 import 'widgets/device_home_screen.dart';
+import 'widgets/pairing_overlay.dart';
 import 'widgets/project_files_panel.dart';
 import 'widgets/project_form_overlay.dart';
 import 'widgets/project_tab_bar.dart';
@@ -101,7 +101,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     with TickerProviderStateMixin {
   final _storage = StorageService();
   final _imagePicker = ImagePicker();
-  final _qrController = TextEditingController();
   final _settingsNameController = TextEditingController();
   final _fileEditorController = CodeEditingController();
   final _projectNameController = TextEditingController();
@@ -126,14 +125,17 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   StoredDevice? _activeDevice;
   MobileSettings _settings = const MobileSettings(localName: '');
   String _detectedDeviceName = 'Codux Mobile';
-  String _status = '未连接';
+  String _status = '';
   String? _selectedProjectId;
   String? _sessionId;
   String? _creatingTerminalProjectId;
   final Set<String> _ownedTerminalIds = {};
-  bool _showPairing = false;
   bool _showSettings = false;
   bool _showScanner = false;
+  PairingPayload? _pendingPairing;
+  bool _pairingInFlight = false;
+  bool _pairingCancelled = false;
+  String? _pairingError;
   bool _showTerminal = false;
   bool _terminalReady = false;
   bool _terminalListLoaded = false;
@@ -175,6 +177,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _filePickerTimeoutTimer;
 
   bool get _isConnected => _socket != null && _relayReady;
+  String _t(String key, {Map<String, String>? params}) =>
+      AppPreferences.of(context).t(key, params: params);
+
   ProjectInfo? get _selectedProject {
     for (final project in _projects) {
       if (project.id == _selectedProjectId) return project;
@@ -206,7 +211,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _socketSubscription?.cancel();
     _socket?.close();
     _nativeTerminalController?.dispose();
-    _qrController.dispose();
     _settingsNameController.dispose();
     _fileEditorController.dispose();
     _projectNameController.dispose();
@@ -229,7 +233,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _settingsNameController.text = next.localName;
       _devices = devices;
       _activeDevice = devices.isNotEmpty ? devices.first : null;
-      _showPairing = false;
       _showTerminal = false;
     });
     if (devices.isNotEmpty) _connect(devices.first, true);
@@ -275,36 +278,92 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     await _saveDevices(next);
     setState(() {
       _activeDevice = device;
-      _showPairing = false;
       _showTerminal = false;
-      _qrController.clear();
-      _status = '配对成功，正在连接';
+      _status = _t('pair.success');
     });
     _connect(device);
   }
 
-  Future<void> _pair() async {
+  void _handleScannedPayload(String raw) {
+    if (!_showScanner || _pendingPairing != null) return;
     try {
-      setState(() => _status = '提交配对申请...');
-      final payload = parsePairingPayload(_qrController.text);
-      final name = _settings.localName.isNotEmpty
-          ? _settings.localName
-          : _detectedDeviceName;
-      await claimPairing(payload, name);
-      setState(() => _status = '等待 Mac 端确认...');
-      final confirmed = await waitPairingConfirmed(payload, name);
-      await _saveDevice(confirmed);
+      final payload = parsePairingPayload(raw);
+      setState(() {
+        _showScanner = false;
+        _pendingPairing = payload;
+        _pairingInFlight = false;
+        _pairingCancelled = false;
+        _pairingError = null;
+      });
     } catch (error) {
-      setState(
-        () => _status = error.toString().replaceFirst('Exception: ', ''),
-      );
+      setState(() => _showScanner = false);
+      _showToast(error.toString().replaceFirst('Exception: ', ''));
     }
   }
 
-  Future<void> _pasteQr() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    if (data?.text != null) {
-      setState(() => _qrController.text = data!.text!);
+  void _cancelPairing() {
+    if (_pairingInFlight) {
+      setState(() => _pairingCancelled = true);
+      return;
+    }
+    setState(() {
+      _pendingPairing = null;
+      _pairingInFlight = false;
+      _pairingCancelled = false;
+      _pairingError = null;
+    });
+  }
+
+  Future<void> _confirmPairing() async {
+    final payload = _pendingPairing;
+    if (payload == null || _pairingInFlight) return;
+    final name = _settings.localName.isNotEmpty
+        ? _settings.localName
+        : _detectedDeviceName;
+    setState(() {
+      _pairingInFlight = true;
+      _pairingCancelled = false;
+      _pairingError = null;
+      _status = _t('pair.submitting');
+    });
+    try {
+      await claimPairing(payload, name);
+      if (_pairingCancelled) throw const PairingCancelledException();
+      setState(() => _status = _t('pair.waiting'));
+      final confirmed = await waitPairingConfirmed(
+        payload,
+        name,
+        isCancelled: () => _pairingCancelled,
+      );
+      if (!mounted) return;
+      final hostName = confirmed.hostName?.trim().isNotEmpty == true
+          ? confirmed.hostName!.trim()
+          : confirmed.name;
+      setState(() {
+        _pendingPairing = null;
+        _pairingInFlight = false;
+        _pairingCancelled = false;
+        _pairingError = null;
+      });
+      await _saveDevice(confirmed);
+      _showToast(_t('device.bound', params: {'name': hostName}));
+    } on PairingCancelledException {
+      if (!mounted) return;
+      setState(() {
+        _pendingPairing = null;
+        _pairingInFlight = false;
+        _pairingCancelled = false;
+        _pairingError = null;
+        _status = _t('pair.cancelled');
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _pairingInFlight = false;
+        _pairingCancelled = false;
+        _pairingError = error.toString().replaceFirst('Exception: ', '');
+        _status = _pairingError ?? _t('pair.failed');
+      });
     }
   }
 
@@ -318,7 +377,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     setState(() {
       _settings = next;
       _showSettings = false;
-      _status = '设置已保存';
+      _status = _t('settings.saved');
     });
     _send(
       RelayEnvelope(type: 'device.info', payload: {'name': next.localName}),
@@ -328,7 +387,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _connect([StoredDevice? device, bool background = false]) {
     final target = device ?? _activeDevice;
     if (target == null) {
-      setState(() => _showPairing = true);
+      setState(() => _showScanner = true);
       return;
     }
     _shouldReconnect = true;
@@ -341,7 +400,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     setState(() {
       _relayReady = false;
       if (!background) {
-        _status = '连接中...';
+        _status = _t('app.connecting');
         _projects = [];
         _terminals = [];
         _terminalListLoaded = false;
@@ -360,14 +419,16 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         (event) => _handleSocketMessage(event, target),
         onDone: () => _handleSocketClosed(target),
         onError: (error) {
-          if (!_backgroundConnect) setState(() => _status = '连接错误');
+          if (!_backgroundConnect) {
+            setState(() => _status = _t('app.connectError'));
+          }
           _handleSocketClosed(target);
         },
       );
       channel.ready.catchError((error) {
         if (_socket != socket) return null;
         if (!_backgroundConnect && mounted) {
-          setState(() => _status = '连接失败，后台重试中');
+          setState(() => _status = _t('connection.failedRetry'));
         }
         _handleSocketClosed(target);
         return null;
@@ -376,7 +437,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         if (_socket == socket && !_relayReady) socket.close();
       });
     } catch (error) {
-      if (!background) setState(() => _status = '连接失败：$error');
+      if (!background) {
+        setState(
+          () => _status = _t(
+            'connection.failedWithReason',
+            params: {'reason': '$error'},
+          ),
+        );
+      }
       _scheduleReconnect(target);
     }
   }
@@ -390,7 +458,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _socket = null;
       setState(() {
         _relayReady = false;
-        _status = '连接断开，后台重试中';
+        _status = _t('app.reconnecting');
       });
       _scheduleReconnect(target);
     }
@@ -432,7 +500,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   bool _send(RelayEnvelope message, [WebSocketSinkLike? target]) {
     final sink = target ?? _socket;
     if (sink == null) {
-      setState(() => _status = 'WebSocket 未连接');
+      setState(() => _status = _t('app.wsNotConnected'));
       CoduxLog.warn(
         '[codux-flutter-relay] drop type=${message.type} reason=no_socket',
       );
@@ -461,15 +529,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             setState(() {
               _relayReady = true;
               _hasShownTerminal = true;
-              if (!_backgroundConnect) _status = '已连接';
+              if (!_backgroundConnect) _status = _t('app.connected');
             });
             _sendInitialRelayRequests(force: true);
           }
         case 'host.offline':
           final payload = message.payload;
           final messageText = payload is Map
-              ? '${payload['message'] ?? 'Mac 端未连接'}'
-              : 'Mac 端未连接';
+              ? '${payload['message'] ?? _t('connection.macDisconnected')}'
+              : _t('connection.macDisconnected');
           setState(() {
             _relayReady = false;
             _showTerminal = false;
@@ -628,7 +696,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           }
         case 'project.updated':
           _refreshLists();
-          _showToast('项目已更新');
+          _showToast(_t('project.updated'));
         case 'ai.stats':
           final payload = message.payload;
           if (payload is Map<String, dynamic>) {
@@ -682,8 +750,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             }
             setState(
               () => _status = mode == 'clipboard'
-                  ? '图片已上传，并通过 ${tool ?? 'AI 工具'} 粘贴快捷键发送'
-                  : '图片已上传，并粘贴临时路径',
+                  ? _t(
+                      'upload.imageSentTool',
+                      params: {'tool': tool ?? _t('upload.aiTool')},
+                    )
+                  : _t('upload.imageSentPath'),
             );
           }
         case 'error':
@@ -695,8 +766,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _status =
                 message.error ??
                 (payload is Map
-                    ? '${payload['message'] ?? '远程端返回错误'}'
-                    : '远程端返回错误');
+                    ? '${payload['message'] ?? _t('remote.error')}'
+                    : _t('remote.error'));
           });
       }
     } catch (_) {}
@@ -802,7 +873,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       id = _sessionId;
     }
     if (id == null) {
-      setState(() => _status = '正在创建终端，请稍后再输入');
+      setState(() => _status = _t('terminal.creating'));
       return;
     }
     final now = DateTime.now();
@@ -850,7 +921,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _selectedProjectId ??
         (_projects.isNotEmpty ? _projects.first.id : null);
     if (target == null) {
-      setState(() => _status = '没有可用项目');
+      setState(() => _status = _t('project.noAvailable'));
       return;
     }
     if (_creatingTerminalProjectId == target) return;
@@ -886,7 +957,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _rebuildCurrentTerminal() {
     final projectId = _selectedProjectId;
     if (projectId == null) {
-      _showToast('请先选择项目');
+      _showToast(_t('project.selectFirst'));
       return;
     }
     String? closingSessionId;
@@ -915,7 +986,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _send(RelayEnvelope(type: 'terminal.close', sessionId: closingSessionId));
     }
     _createTerminal(projectId);
-    _showToast('正在重建终端');
+    _showToast(_t('terminal.rebuilding'));
   }
 
   void _ensureTerminalForSelectedProject() {
@@ -957,7 +1028,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _requestProjectEdit() {
     final project = _selectedProject;
     if (project == null) {
-      _showSnack('请先选择项目');
+      _showSnack(_t('project.selectFirst'));
       return;
     }
     setState(() {
@@ -986,7 +1057,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _saveProjectForm() {
     final path = _projectPathController.text.trim();
     if (path.isEmpty) {
-      _showToast('请先选择项目路径');
+      _showToast(_t('project.selectPathFirst'));
       return;
     }
     final name = _projectNameController.text.trim().isEmpty
@@ -1010,7 +1081,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       );
     }
     setState(() => _showProjectForm = false);
-    _showToast('已提交项目保存');
+    _showToast(_t('project.saveSubmitted'));
   }
 
   void _openRemoteFilePicker([String? path]) {
@@ -1023,7 +1094,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _filePickerTimeoutTimer = Timer(const Duration(seconds: 8), () {
       if (!mounted || !_filePickerLoading) return;
       setState(() => _filePickerLoading = false);
-      _showToast('目录读取超时，请确认 Mac 端远程服务在线');
+      _showToast(_t('remote.dirTimeout'));
     });
     final payload = path == null
         ? <String, Object>{}
@@ -1055,19 +1126,19 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _requestProjectRemove() {
     final project = _selectedProject;
     if (project == null) {
-      _showSnack('请先选择项目');
+      _showSnack(_t('project.selectFirst'));
       return;
     }
     _send(
       RelayEnvelope(type: 'project.remove', payload: {'projectId': project.id}),
     );
-    _showToast('已请求移除项目');
+    _showToast(_t('project.removeRequested'));
   }
 
   void _requestAIStats() {
     final project = _selectedProject;
     if (project == null) {
-      _showToast('请先选择项目');
+      _showToast(_t('project.selectFirst'));
       return;
     }
     setState(() {
@@ -1108,7 +1179,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _showFilesMode() {
     final project = _selectedProject;
     if (project == null) {
-      _showToast('请先选择项目');
+      _showToast(_t('project.selectFirst'));
       return;
     }
     final rememberedPath = _projectFilePathMemory[project.id];
@@ -1125,7 +1196,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     final project = _selectedProject;
     final target = path ?? project?.path;
     if (target == null || target.isEmpty) {
-      _showToast('当前项目没有目录');
+      _showToast(_t('project.currentNoDir'));
       return;
     }
     setState(() {
@@ -1318,7 +1389,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgSurface,
-        title: const Text('编辑电脑'),
+        title: Text(_t('device.editTitle')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1326,7 +1397,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               controller: nameController,
               cursorColor: accent,
               decoration: InputDecoration(
-                labelText: '设备名称',
+                labelText: _t('device.nameLabel'),
                 labelStyle: const TextStyle(color: AppColors.textMuted),
                 focusedBorder: UnderlineInputBorder(
                   borderSide: BorderSide(color: accent),
@@ -1338,7 +1409,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               controller: serverController,
               cursorColor: accent,
               decoration: InputDecoration(
-                labelText: '服务器地址',
+                labelText: _t('device.serverLabel'),
                 labelStyle: const TextStyle(color: AppColors.textMuted),
                 focusedBorder: UnderlineInputBorder(
                   borderSide: BorderSide(color: accent),
@@ -1351,7 +1422,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           TextButton(
             style: TextButton.styleFrom(foregroundColor: accent),
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
+            child: Text(_t('app.cancel')),
           ),
           TextButton(
             style: TextButton.styleFrom(foregroundColor: accent),
@@ -1368,7 +1439,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                 ),
               );
             },
-            child: const Text('保存'),
+            child: Text(_t('common.save')),
           ),
         ],
       ),
@@ -1446,7 +1517,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Future<void> _uploadImageToTerminal() async {
     final id = _sessionId;
     if (id == null) {
-      setState(() => _status = '请先创建或选择终端');
+      setState(() => _status = _t('terminal.createOrSelectFirst'));
       return;
     }
     final image = await _imagePicker.pickImage(
@@ -1458,7 +1529,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (image == null) return;
     final bytes = await image.readAsBytes();
     if (bytes.isEmpty) return;
-    setState(() => _status = '正在上传图片...');
+    setState(() => _status = _t('upload.imageUploading'));
     _send(
       RelayEnvelope(
         type: 'terminal.upload',
@@ -1474,8 +1545,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   Future<void> _checkUpdate() async {
     setState(() {
-      _status = '正在检查更新...';
-      _blockingLoadingMessage = '正在检查更新';
+      _status = _t('update.checking');
+      _blockingLoadingMessage = _t('update.loading');
     });
     try {
       final info = await PackageInfo.fromPlatform();
@@ -1492,23 +1563,25 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           )
           .timeout(const Duration(seconds: 10));
       if (response.statusCode == 404) {
-        _showToast('暂未发布 GitHub Release');
+        _showToast(_t('update.noRelease'));
         return;
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        _showToast('检查更新失败：HTTP ${response.statusCode}');
+        _showToast(
+          _t('update.httpFailed', params: {'status': '${response.statusCode}'}),
+        );
         return;
       }
       final json = jsonDecode(response.body) as Map<String, dynamic>;
       final tag = '${json['tag_name'] ?? ''}'.trim();
       final url = '${json['html_url'] ?? ''}'.trim();
       if (tag.isEmpty) {
-        _showToast('没有找到版本信息');
+        _showToast(_t('update.noVersion'));
         return;
       }
       final hasUpdate = _compareVersion(tag, info.version) > 0;
       if (!hasUpdate) {
-        _showToast('已是最新版本 v${info.version}');
+        _showToast(_t('update.latest', params: {'version': info.version}));
         return;
       }
       if (!mounted) return;
@@ -1517,13 +1590,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.bgSurface,
-          title: Text('发现新版本 $tag'),
-          content: Text('当前版本 v${info.version}，可前往 GitHub Releases 下载更新。'),
+          title: Text(_t('update.foundTitle', params: {'version': tag})),
+          content: Text(
+            _t('update.foundBody', params: {'version': info.version}),
+          ),
           actions: [
             TextButton(
               style: TextButton.styleFrom(foregroundColor: accent),
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('稍后'),
+              child: Text(_t('common.later')),
             ),
             TextButton(
               style: TextButton.styleFrom(foregroundColor: accent),
@@ -1531,13 +1606,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                 Navigator.pop(ctx);
                 if (url.isNotEmpty) _openUrl(url);
               },
-              child: const Text('打开 GitHub'),
+              child: Text(_t('common.openGithub')),
             ),
           ],
         ),
       );
     } catch (error) {
-      _showToast('检查更新失败：$error');
+      _showToast(_t('update.failed', params: {'reason': '$error'}));
     } finally {
       if (mounted) setState(() => _blockingLoadingMessage = null);
     }
@@ -1569,14 +1644,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgSurface,
-        title: const Text('关于 Codux'),
+        title: Text(_t('app.about')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Codux Mobile 是 Codux 的移动控制端，用于连接 Mac、查看项目、控制终端和后续 AI 统计。',
-            ),
+            Text(_t('app.aboutText')),
             const SizedBox(height: AppSpacing.m),
             Text(
               'v${info.version}+${info.buildNumber}',
@@ -1599,7 +1672,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           TextButton(
             style: TextButton.styleFrom(foregroundColor: accent),
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('关闭'),
+            child: Text(_t('app.close')),
           ),
         ],
       ),
@@ -1630,22 +1703,28 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.bgSurface,
-        title: const Text('移除电脑'),
+        title: Text(_t('app.removeDevice')),
         content: Text(
-          '本地删除 ${device.hostName ?? device.name}？\n（Mac 端仍需主动移除设备）',
+          _t(
+            'app.removeDeviceConfirm',
+            params: {'name': device.hostName ?? device.name},
+          ),
         ),
         actions: [
           TextButton(
             style: TextButton.styleFrom(foregroundColor: accent),
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
+            child: Text(_t('app.cancel')),
           ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
               _removeDevice(device);
             },
-            child: const Text('移除', style: TextStyle(color: AppColors.danger)),
+            child: Text(
+              _t('app.remove'),
+              style: const TextStyle(color: AppColors.danger),
+            ),
           ),
         ],
       ),
@@ -1679,8 +1758,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       setState(() => _showSettings = false);
       return;
     }
-    if (_showPairing && _activeDevice != null) {
-      setState(() => _showPairing = false);
+    if (_pendingPairing != null) {
+      _cancelPairing();
       return;
     }
     if (_showTerminal) {
@@ -1690,7 +1769,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       });
       return;
     }
-    _showToast('已在设备列表');
+    _showToast(_t('device.alreadyInList'));
   }
 
   @override
@@ -1723,24 +1802,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         onSave: _saveSettings,
         onBack: () => setState(() => _showSettings = false),
       );
-    } else if (_showPairing) {
-      body = PairingScreen(
-        status: _status,
-        qrController: _qrController,
-        topInset: topInset,
-        bottomInset: bottomInset,
-        showBack: _activeDevice != null,
-        onScan: () => setState(() => _showScanner = true),
-        onPair: _pair,
-        onPaste: _pasteQr,
-        onBack: () => setState(() => _showPairing = false),
-      );
     } else if (!_showTerminal) {
       body = DeviceHomeScreen(
         devices: _devices,
         activeDeviceId: _activeDevice?.deviceId,
         connected: _isConnected,
-        status: _status,
+        status: _status.isEmpty ? prefs.t('app.notConnected') : _status,
         topInset: topInset,
         bottomInset: bottomInset,
         onOpen: _openDeviceTerminal,
@@ -1769,19 +1836,24 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             if (_showScanner)
               ScannerScreen(
                 bottomInset: bottomInset,
-                onDetected: (value) => setState(() {
-                  _qrController.text = value;
-                  _showScanner = false;
-                  _showPairing = true;
-                  _status = '已扫描二维码，点击申请配对';
-                }),
+                onDetected: _handleScannedPayload,
                 onClose: () => setState(() => _showScanner = false),
+              ),
+            if (_pendingPairing != null)
+              PairingOverlay(
+                payload: _pendingPairing!,
+                waiting: _pairingInFlight,
+                errorMessage: _pairingError,
+                onCancel: _cancelPairing,
+                onConfirm: _confirmPairing,
               ),
             if (_showProjectForm)
               ProjectFormOverlay(
                 topInset: topInset,
                 bottomInset: bottomInset,
-                title: _projectFormMode == 'edit' ? '修改项目' : '添加项目',
+                title: _projectFormMode == 'edit'
+                    ? _t('project.edit')
+                    : _t('project.add'),
                 nameController: _projectNameController,
                 pathController: _projectPathController,
                 onClose: () => setState(() => _showProjectForm = false),
@@ -1792,7 +1864,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               RemoteFilePicker(
                 topInset: topInset,
                 bottomInset: bottomInset,
-                title: _filePickerMode == 'edit' ? '修改项目目录' : '添加项目目录',
+                title: _filePickerMode == 'edit'
+                    ? _t('project.pathLabel')
+                    : _t('project.pathLabel'),
                 path: _filePickerPath,
                 parent: _filePickerParent,
                 entries: _filePickerEntries,
@@ -1946,7 +2020,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                             )
                           else
                             ConnectHint(
-                              status: _status,
+                              status: _status.isEmpty
+                                  ? AppPreferences.of(
+                                      context,
+                                    ).t('app.notConnected')
+                                  : _status,
                               hasDevice: _activeDevice != null,
                               onConnect: () => _connect(),
                             ),
