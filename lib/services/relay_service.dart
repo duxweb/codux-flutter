@@ -110,6 +110,9 @@ Future<StoredDevice> waitPairingConfirmed(
       'secret': payload.secret,
     });
     if (isCancelled?.call() == true) throw const PairingCancelledException();
+    if (status['status'] == 'rejected') {
+      throw Exception(tr('pair.rejected', LocaleChoices.system.id));
+    }
     if (status['status'] == 'confirmed' &&
         status['deviceId'] != null &&
         status['token'] != null) {

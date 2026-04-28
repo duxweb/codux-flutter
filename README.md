@@ -28,7 +28,12 @@
 
 ---
 
-> Screenshot placeholders are reserved under `docs/images/`. Add release screenshots after the first public APK build is verified on device.
+## Preview
+
+<p align="center">
+  <img src="docs/images/device.jpg" width="260" alt="Codux Mobile device list">
+  <img src="docs/images/main.jpg" width="260" alt="Codux Mobile terminal screen">
+</p>
 
 ## Why Codux Mobile?
 

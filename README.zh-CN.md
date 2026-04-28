@@ -28,7 +28,12 @@
 
 ---
 
-> 截图位置已预留在 `docs/images/`。第一版公开 APK 在真机验证后，再补正式截图。
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/device.jpg" width="260" alt="Codux Mobile 设备列表">
+  <img src="docs/images/main.jpg" width="260" alt="Codux Mobile 终端界面">
+</p>
 
 ## 为什么需要 Codux Mobile？
 
