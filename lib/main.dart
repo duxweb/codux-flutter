@@ -19,6 +19,8 @@ import 'services/log_service.dart';
 import 'services/relay_service.dart';
 import 'services/storage_service.dart';
 import 'services/terminal_buffer_retry.dart';
+import 'services/terminal_input_batcher.dart';
+import 'services/terminal_payload_codec.dart';
 import 'theme/app_theme.dart';
 import 'widgets/ai_stats_panel.dart';
 import 'widgets/app_toast.dart';
@@ -34,6 +36,8 @@ import 'widgets/terminal_transition_mask.dart';
 import 'widgets/toolbar.dart';
 
 typedef RelaySocketFactory = dynamic Function(StoredDevice device);
+
+const _voiceInputChannel = MethodChannel('codux_mobile/voice');
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -126,8 +130,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   late final AnimationController _maskController;
   late final Animation<double> _maskOpacity;
   late final TerminalBufferRetryCoordinator _terminalBufferRetry;
+  late final TerminalInputBatcher _terminalInputBatcher;
   CoduxNativeTerminalController? _nativeTerminalController;
   String _pendingTerminalOutput = '';
+  final Map<String, String> _terminalOutputCache = {};
+  final Map<String, int> _terminalBufferLengths = {};
   double _terminalCursorBottom = 0;
   int? _lastTerminalCols;
   int? _lastTerminalRows;
@@ -246,6 +253,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         setState(() => _terminalBufferLoading = false);
       },
     );
+    _terminalInputBatcher = TerminalInputBatcher(send: _sendInputNow);
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
@@ -260,6 +268,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _projectListRetryTimer?.cancel();
     _terminalListRetryTimer?.cancel();
     _terminalBufferRetry.dispose();
+    _terminalInputBatcher.dispose();
     _socketSubscription?.cancel();
     _socket?.close();
     _nativeTerminalController?.dispose();
@@ -542,6 +551,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _receiveChain = Future<void>.value();
     RemoteE2ECrypto.clearCache();
     if (!background) _clearTerminal();
+    if (!background) _terminalInputBatcher.reset();
     setState(() {
       _relayReady = false;
       if (!background) {
@@ -866,6 +876,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           final messageText = payload is Map
               ? '${payload['message'] ?? _t('connection.macDisconnected')}'
               : _t('connection.macDisconnected');
+          _terminalInputBatcher.reset();
           setState(() {
             _relayReady = false;
             _showTerminal = false;
@@ -929,6 +940,19 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           CoduxLog.info(
             '[codux-flutter-terminal] terminal.list count=${next.length}',
           );
+          final activeSessionMissing =
+              _sessionId != null &&
+              !next.any(
+                (item) => item.id == _sessionId && _isAccessibleTerminal(item),
+              );
+          if (activeSessionMissing) {
+            final missingSessionId = _sessionId;
+            _terminalInputBatcher.reset();
+            if (missingSessionId != null) {
+              _terminalOutputCache.remove(missingSessionId);
+              _terminalBufferLengths.remove(missingSessionId);
+            }
+          }
           setState(() {
             _terminals = next;
             for (final terminal in next) {
@@ -937,11 +961,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               }
             }
             _terminalListLoaded = true;
-            if (_sessionId != null &&
-                !next.any(
-                  (item) =>
-                      item.id == _sessionId && _isOwnedByCurrentDevice(item),
-                )) {
+            if (activeSessionMissing) {
               _sessionId = null;
               _terminalBufferRetry.reset();
               _terminalBufferLoading = false;
@@ -959,7 +979,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               '[codux-flutter-terminal] created session=${terminal.id} project=${terminal.projectId}',
             );
             setState(() {
-              _ownedTerminalIds.add(terminal.id);
+              if (_hasCurrentDeviceOwner(terminal)) {
+                _ownedTerminalIds.add(terminal.id);
+              }
               _terminals = [
                 terminal,
                 ..._terminals.where((item) => item.id != terminal.id),
@@ -973,17 +995,23 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _clearTerminal();
             _flushPendingTerminalResize(force: true);
             _requestBufferIfReady();
+            _terminalInputBatcher.flush();
           }
         case 'terminal.closed':
           final closedSessionId = message.sessionId;
           final closedActiveSession =
               closedSessionId != null && _sessionId == closedSessionId;
+          if (closedActiveSession) {
+            _terminalInputBatcher.reset();
+          }
           setState(() {
             _terminals = _terminals
                 .where((item) => item.id != closedSessionId)
                 .toList();
             if (closedSessionId != null) {
               _ownedTerminalIds.remove(closedSessionId);
+              _terminalOutputCache.remove(closedSessionId);
+              _terminalBufferLengths.remove(closedSessionId);
             }
             if (closedActiveSession) {
               _sessionId = null;
@@ -997,24 +1025,47 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         case 'terminal.output':
           final payload = message.payload;
           if (payload is Map && payload['data'] != null) {
-            if (message.sessionId == null || message.sessionId != _sessionId) {
+            final sessionId = message.sessionId;
+            if (sessionId == null || sessionId != _sessionId) {
               CoduxLog.debug(
                 '[codux-flutter-output] skip inactive session=${message.sessionId ?? ''} active=${_sessionId ?? ''}',
               );
               return;
             }
-            final raw = '${payload['data']}';
-            final isBuffer = payload['buffer'] == true;
+            final decoded = decodeTerminalOutputPayload(payload);
+            final raw = decoded.data;
+            final isBuffer = decoded.isBuffer;
             CoduxLog.debug(
               '[codux-flutter-output] bytes=${raw.codeUnits.length} buffer=$isBuffer session=${message.sessionId ?? ''} data=${_debugTerminalSnippet(raw)}',
             );
             if (isBuffer) {
-              _markTerminalBufferReceived(message.sessionId);
-              _clearTerminal();
+              _markTerminalBufferReceived(sessionId);
+              if ((decoded.offset ?? 0) <= 0 ||
+                  !_terminalOutputCache.containsKey(sessionId)) {
+                _clearTerminal();
+                _replaceTerminalOutputCache(
+                  sessionId,
+                  raw,
+                  decoded.bufferLength,
+                );
+              } else {
+                _appendTerminalOutputCache(
+                  sessionId,
+                  raw,
+                  decoded.bufferLength,
+                );
+              }
             } else if (raw.isNotEmpty && _terminalBufferLoading) {
               setState(() => _terminalBufferLoading = false);
             }
             if (raw.isNotEmpty) {
+              if (!isBuffer) {
+                _appendTerminalOutputCache(
+                  sessionId,
+                  raw,
+                  decoded.bufferLength,
+                );
+              }
               _writeTerminalData(raw, replayingBuffer: isBuffer);
             }
           }
@@ -1141,13 +1192,20 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _saveDevices(next);
   }
 
-  void _requestBufferIfReady({bool force = false}) {
+  void _requestBufferIfReady({bool force = false, bool full = false}) {
     final sent = _terminalBufferRetry.requestIfReady(
       terminalReady: _terminalReady,
       sessionId: _sessionId,
       force: force,
-      send: (sessionId) =>
-          _send(RelayEnvelope(type: 'terminal.buffer', sessionId: sessionId)),
+      send: (sessionId) => _send(
+        RelayEnvelope(
+          type: 'terminal.buffer',
+          sessionId: sessionId,
+          payload: {
+            'offset': full ? 0 : (_terminalBufferLengths[sessionId] ?? 0),
+          },
+        ),
+      ),
     );
     if (sent && !_terminalBufferLoading && mounted) {
       CoduxLog.info(
@@ -1179,7 +1237,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _writeTerminalData(String data, {required bool replayingBuffer}) {
-    final displayData = data;
+    final displayData = _filterStandalonePromptLines(data);
     if (displayData.isEmpty) return;
     final controller = _nativeTerminalController;
     if (controller == null) {
@@ -1195,12 +1253,88 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     controller.write(displayData);
   }
 
+  String _filterStandalonePromptLines(String data) {
+    if (!data.contains('%')) return data;
+    final output = StringBuffer();
+    var index = 0;
+    while (index < data.length) {
+      var end = index;
+      while (end < data.length) {
+        final codeUnit = data.codeUnitAt(end);
+        if (codeUnit == 10 || codeUnit == 13) break;
+        end += 1;
+      }
+
+      var lineEnd = end;
+      if (end < data.length) {
+        final codeUnit = data.codeUnitAt(end);
+        if (codeUnit == 13 &&
+            end + 1 < data.length &&
+            data.codeUnitAt(end + 1) == 10) {
+          lineEnd = end + 2;
+        } else {
+          lineEnd = end + 1;
+        }
+      }
+
+      final line = data.substring(index, end);
+      final isTerminatedLine = end < data.length;
+      final isStandalonePromptArtifact =
+          isTerminatedLine && _stripTerminalControls(line).trim() == '%';
+      if (!isStandalonePromptArtifact) {
+        output.write(data.substring(index, lineEnd));
+      }
+      index = lineEnd;
+    }
+    return output.toString();
+  }
+
+  String _stripTerminalControls(String data) {
+    return data
+        .replaceAll(RegExp('\u001B\\[[0-?]*[ -/]*[@-~]'), '')
+        .replaceAll(
+          RegExp('\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)'),
+          '',
+        );
+  }
+
+  void _replaceTerminalOutputCache(
+    String sessionId,
+    String data,
+    int? bufferLength,
+  ) {
+    _terminalOutputCache[sessionId] = data;
+    if (bufferLength != null) {
+      _terminalBufferLengths[sessionId] = bufferLength;
+    }
+  }
+
+  void _appendTerminalOutputCache(
+    String sessionId,
+    String data,
+    int? bufferLength,
+  ) {
+    if (data.isNotEmpty) {
+      final current = _terminalOutputCache[sessionId] ?? '';
+      var next = current + data;
+      if (next.length > 2000000) {
+        next = next.substring(next.length - 2000000);
+      }
+      _terminalOutputCache[sessionId] = next;
+    }
+    if (bufferLength != null) {
+      _terminalBufferLengths[sessionId] = bufferLength;
+    }
+  }
+
   void _sendTerminalResize(int cols, int rows) {
     final id = _sessionId;
     if (cols <= 0 || rows <= 0) return;
     _pendingTerminalCols = cols;
     _pendingTerminalRows = rows;
     if (id == null) return;
+    final terminal = _currentTerminal();
+    if (!_canResizeTerminal(terminal)) return;
     final nextRows = _keyboardVisible ? (_lastTerminalRows ?? rows) : rows;
     if (_lastTerminalCols == cols && _lastTerminalRows == nextRows) {
       return;
@@ -1223,6 +1357,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (id == null || cols == null || rows == null || cols <= 0 || rows <= 0) {
       return;
     }
+    final terminal = _currentTerminal();
+    if (!_canResizeTerminal(terminal)) return;
     if (!force && _lastTerminalCols == cols && _lastTerminalRows == rows) {
       return;
     }
@@ -1238,6 +1374,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _sendInput(String data) {
+    _terminalInputBatcher.add(data);
+  }
+
+  void _sendInputNow(String data) {
     if (data.isEmpty) return;
     var id = _sessionId;
     if (id == null) {
@@ -1315,6 +1455,16 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     return _hasCurrentDeviceOwner(terminal);
   }
 
+  bool _isSharedMacTerminal(TerminalInfo terminal) {
+    return terminal.resizeOwner == 'mac' ||
+        terminal.kind == 'desktop-shared' ||
+        terminal.ownerKind == 'mac';
+  }
+
+  bool _isAccessibleTerminal(TerminalInfo terminal) {
+    return _isOwnedByCurrentDevice(terminal) || _isSharedMacTerminal(terminal);
+  }
+
   bool _hasCurrentDeviceOwner(TerminalInfo terminal) {
     final ownerDeviceId = terminal.ownerDeviceId;
     final activeDeviceId = _activeDevice?.deviceId;
@@ -1322,6 +1472,82 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         ownerDeviceId != null &&
         ownerDeviceId.isNotEmpty &&
         ownerDeviceId == activeDeviceId;
+  }
+
+  TerminalInfo? _currentTerminal() {
+    final id = _sessionId;
+    if (id == null) return null;
+    for (final terminal in _terminals) {
+      if (terminal.id == id) return terminal;
+    }
+    return null;
+  }
+
+  bool _canResizeTerminal(TerminalInfo? terminal) {
+    if (terminal == null) return false;
+    if (_isSharedMacTerminal(terminal)) return true;
+    if (terminal.resizeOwner == 'mobile') {
+      return _isOwnedByCurrentDevice(terminal);
+    }
+    return false;
+  }
+
+  List<TerminalInfo> _currentProjectTerminals() {
+    final projectId = _selectedProjectId;
+    if (projectId == null) return const [];
+    return _terminals
+        .where(
+          (item) => item.projectId == projectId && _isAccessibleTerminal(item),
+        )
+        .toList();
+  }
+
+  void _selectTerminal(TerminalInfo terminal) {
+    if (!_isAccessibleTerminal(terminal)) return;
+    _terminalInputBatcher.flush();
+    setState(() {
+      _sessionId = terminal.id;
+      _selectedProjectId = terminal.projectId;
+      _workspaceMode = 'terminal';
+      _terminalBufferRetry.reset();
+      _terminalBufferLoading = false;
+      _creatingTerminalProjectId = null;
+      _terminalCursorBottom = 0;
+    });
+    _clearTerminal();
+    _flushPendingTerminalResize(force: true);
+    _requestBufferIfReady(force: true, full: true);
+    _focusTerminalViewSoon();
+  }
+
+  void _createCurrentProjectTerminal() {
+    final projectId = _selectedProjectId;
+    if (projectId == null) {
+      _showToast(_t('project.selectFirst'));
+      return;
+    }
+    setState(() => _workspaceMode = 'terminal');
+    _createTerminal(projectId);
+  }
+
+  void _closeCurrentTerminal() {
+    final terminal = _currentTerminal();
+    if (terminal == null || !_isAccessibleTerminal(terminal)) return;
+    _terminalInputBatcher.reset();
+    setState(() {
+      _terminals = _terminals.where((item) => item.id != terminal.id).toList();
+      _ownedTerminalIds.remove(terminal.id);
+      _terminalOutputCache.remove(terminal.id);
+      _terminalBufferLengths.remove(terminal.id);
+      if (_sessionId == terminal.id) {
+        _sessionId = null;
+        _terminalBufferRetry.reset();
+        _terminalBufferLoading = false;
+        _terminalCursorBottom = 0;
+      }
+    });
+    _clearTerminal();
+    _send(RelayEnvelope(type: 'terminal.close', sessionId: terminal.id));
   }
 
   void _refreshLists() {
@@ -1336,20 +1562,31 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       return;
     }
     String? closingSessionId;
-    for (final terminal in _terminals) {
-      if (terminal.projectId != projectId ||
-          !_isOwnedByCurrentDevice(terminal)) {
-        continue;
-      }
-      closingSessionId = terminal.id;
-      if (terminal.id == _sessionId) break;
+    final current = _currentTerminal();
+    final projectTerminals = _terminals
+        .where(
+          (terminal) =>
+              terminal.projectId == projectId &&
+              _isAccessibleTerminal(terminal),
+        )
+        .toList();
+    if (current != null &&
+        current.projectId == projectId &&
+        _isAccessibleTerminal(current)) {
+      closingSessionId = current.id;
+    } else if (projectTerminals.isNotEmpty) {
+      closingSessionId = projectTerminals.first.id;
     }
+    final shouldCreateReplacement = projectTerminals.length > 1;
+    _terminalInputBatcher.reset();
     setState(() {
       if (closingSessionId != null) {
         _terminals = _terminals
             .where((item) => item.id != closingSessionId)
             .toList();
         _ownedTerminalIds.remove(closingSessionId);
+        _terminalOutputCache.remove(closingSessionId);
+        _terminalBufferLengths.remove(closingSessionId);
       }
       _sessionId = null;
       _terminalBufferRetry.reset();
@@ -1361,7 +1598,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (closingSessionId != null) {
       _send(RelayEnvelope(type: 'terminal.close', sessionId: closingSessionId));
     }
-    _createTerminal(projectId);
+    if (shouldCreateReplacement) {
+      _createTerminal(projectId);
+    }
     _showToast(_t('terminal.rebuilding'));
   }
 
@@ -1378,12 +1617,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           (item) =>
               item.id == _sessionId &&
               item.projectId == projectId &&
-              _isOwnedByCurrentDevice(item),
+              _isAccessibleTerminal(item),
         )) {
       return;
     }
     final existing = _terminals.where(
-      (item) => item.projectId == projectId && _isOwnedByCurrentDevice(item),
+      (item) => item.projectId == projectId && _isAccessibleTerminal(item),
     );
     if (existing.isNotEmpty) {
       final terminal = existing.first;
@@ -1396,7 +1635,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       });
       _clearTerminal();
       _flushPendingTerminalResize(force: true);
-      _requestBufferIfReady(force: true);
+      _requestBufferIfReady(force: true, full: true);
+      _terminalInputBatcher.flush();
       return;
     }
     _createTerminal(projectId);
@@ -1533,10 +1773,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         (item) =>
             item.id == _sessionId &&
             item.projectId == projectId &&
-            _isOwnedByCurrentDevice(item),
+            _isAccessibleTerminal(item),
       );
       if (current) return;
     }
+    _terminalInputBatcher.reset();
     setState(() {
       _sessionId = null;
       _terminalBufferRetry.reset();
@@ -1550,7 +1791,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _showTerminalMode() {
     setState(() => _workspaceMode = 'terminal');
     _syncTerminalToSelectedProject();
-    _requestBufferIfReady(force: true);
+    _requestBufferIfReady(force: true, full: true);
     _focusTerminalViewSoon();
   }
 
@@ -1753,7 +1994,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _terminalBufferLoading = false;
     });
     _sendInitialRelayRequests(force: true);
-    _requestBufferIfReady(force: true);
+    _requestBufferIfReady(force: true, full: true);
     _focusTerminalViewSoon();
   }
 
@@ -1837,6 +2078,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _onProjectSelected(ProjectInfo project) {
     final projectChanged = _selectedProjectId != project.id;
     final resetTerminal = projectChanged && _workspaceMode == 'terminal';
+    if (resetTerminal) {
+      _terminalInputBatcher.reset();
+    }
     setState(() {
       _selectedProjectId = project.id;
       _currentAIStats = null;
@@ -1871,7 +2115,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       (item) =>
           item.id == _sessionId &&
           item.projectId == project.id &&
-          _isOwnedByCurrentDevice(item),
+          _isAccessibleTerminal(item),
     );
     if (!current) {
       _ensureTerminalForSelectedProject();
@@ -1891,6 +2135,27 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _showSnack(
       copied ? prefs.t('toolbar.copyDone') : prefs.t('toolbar.copyEmpty'),
     );
+  }
+
+  Future<void> _startVoiceInput() async {
+    final prefs = AppPreferences.of(context);
+    try {
+      _showSnack(prefs.t('toolbar.voiceListening'));
+      final locale = Localizations.localeOf(context).toLanguageTag();
+      final text = await _voiceInputChannel.invokeMethod<String>('listen', {
+        'locale': locale,
+      });
+      final normalized = text?.trim();
+      if (normalized == null || normalized.isEmpty) return;
+      _sendInput(normalized);
+    } on PlatformException catch (error) {
+      final reason = error.message?.trim().isNotEmpty == true
+          ? error.message!
+          : error.code;
+      _showSnack(
+        prefs.t('toolbar.voiceUnavailable', params: {'reason': reason}),
+      );
+    }
   }
 
   Future<void> _uploadImageToTerminal() async {
@@ -2365,7 +2630,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                                   _,
                                 ) {
                                   if (!mounted) return;
-                                  _requestBufferIfReady(force: true);
+                                  _requestBufferIfReady(
+                                    force: true,
+                                    full: true,
+                                  );
                                 });
                               },
                               onInput: _sendInput,
@@ -2383,7 +2651,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                                     _,
                                   ) {
                                     if (!mounted) return;
-                                    _requestBufferIfReady(force: true);
+                                    _requestBufferIfReady(
+                                      force: true,
+                                      full: true,
+                                    );
                                   });
                                 }
                               },
@@ -2514,6 +2785,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                       onPaste: _pasteToTerminal,
                       onCopy: _copyTerminalSelection,
                       onUpload: _uploadImageToTerminal,
+                      onVoiceInput: _startVoiceInput,
                     ),
                   ),
               ],
@@ -2543,8 +2815,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           projects: _projects,
           selectedId: _selectedProjectId,
           loading: _isConnected && !_projectListLoaded,
+          terminals: _currentProjectTerminals(),
+          activeTerminalId: _sessionId,
           onSelect: _onProjectSelected,
+          onSelectTerminal: _selectTerminal,
           onRefresh: _refreshLists,
+          onCreateTerminal: _createCurrentProjectTerminal,
+          onCloseTerminal: _currentTerminal() != null
+              ? _closeCurrentTerminal
+              : null,
           onRebuild: _rebuildCurrentTerminal,
         ),
         Expanded(

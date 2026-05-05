@@ -9,16 +9,26 @@ class ProjectTabBar extends StatelessWidget {
     required this.projects,
     required this.selectedId,
     required this.loading,
+    required this.terminals,
+    required this.activeTerminalId,
     required this.onSelect,
+    required this.onSelectTerminal,
     required this.onRefresh,
+    required this.onCreateTerminal,
+    required this.onCloseTerminal,
     required this.onRebuild,
   });
 
   final List<ProjectInfo> projects;
   final String? selectedId;
   final bool loading;
+  final List<TerminalInfo> terminals;
+  final String? activeTerminalId;
   final ValueChanged<ProjectInfo> onSelect;
+  final ValueChanged<TerminalInfo> onSelectTerminal;
   final VoidCallback onRefresh;
+  final VoidCallback onCreateTerminal;
+  final VoidCallback? onCloseTerminal;
   final VoidCallback onRebuild;
 
   @override
@@ -114,11 +124,93 @@ class ProjectTabBar extends StatelessWidget {
                       onRefresh();
                       return;
                     }
+                    if (value == 'create-terminal') {
+                      onCreateTerminal();
+                      return;
+                    }
+                    if (value == 'close-terminal') {
+                      onCloseTerminal?.call();
+                      return;
+                    }
                     if (value == 'rebuild') {
                       onRebuild();
+                      return;
+                    }
+                    if (value.startsWith('terminal:')) {
+                      final id = value.substring('terminal:'.length);
+                      final matches = terminals.where((item) => item.id == id);
+                      if (matches.isNotEmpty) onSelectTerminal(matches.first);
                     }
                   },
                   itemBuilder: (context) => [
+                    if (terminals.isNotEmpty)
+                      PopupMenuItem<String>(
+                        enabled: false,
+                        height: 30,
+                        child: Text(
+                          prefs.t('app.splits'),
+                          style: const TextStyle(
+                            color: AppColors.textMuted,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                      ),
+                    for (var i = 0; i < terminals.length; i += 1)
+                      PopupMenuItem(
+                        value: 'terminal:${terminals[i].id}',
+                        height: 42,
+                        child: _TerminalMenuItem(
+                          index: i + 1,
+                          active: terminals[i].id == activeTerminalId,
+                          terminalLabel: prefs.t('app.terminal'),
+                        ),
+                      ),
+                    if (terminals.isNotEmpty)
+                      const PopupMenuItem<String>(
+                        enabled: false,
+                        height: 10,
+                        padding: EdgeInsets.zero,
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: AppSpacing.m,
+                          ),
+                          child: SizedBox(
+                            height: 1,
+                            child: ColoredBox(color: AppColors.textSubtle),
+                          ),
+                        ),
+                      ),
+                    PopupMenuItem(
+                      value: 'create-terminal',
+                      height: 40,
+                      child: _ProjectMenuItem(
+                        icon: Icons.add_rounded,
+                        label: prefs.t('app.newTerminal'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'close-terminal',
+                      enabled: onCloseTerminal != null,
+                      height: 40,
+                      child: _ProjectMenuItem(
+                        icon: Icons.close_rounded,
+                        label: prefs.t('app.closeSplit'),
+                        muted: onCloseTerminal == null,
+                      ),
+                    ),
+                    const PopupMenuItem<String>(
+                      enabled: false,
+                      height: 10,
+                      padding: EdgeInsets.zero,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: AppSpacing.m),
+                        child: SizedBox(
+                          height: 1,
+                          child: ColoredBox(color: AppColors.textSubtle),
+                        ),
+                      ),
+                    ),
                     PopupMenuItem(
                       value: 'refresh',
                       height: 40,
@@ -147,27 +239,72 @@ class ProjectTabBar extends StatelessWidget {
 }
 
 class _ProjectMenuItem extends StatelessWidget {
-  const _ProjectMenuItem({required this.icon, required this.label});
+  const _ProjectMenuItem({
+    required this.icon,
+    required this.label,
+    this.muted = false,
+  });
 
   final IconData icon;
   final String label;
+  final bool muted;
 
   @override
   Widget build(BuildContext context) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(icon, size: 18, color: AppColors.textPrimary),
+      Icon(
+        icon,
+        size: 18,
+        color: muted ? AppColors.textSubtle : AppColors.textPrimary,
+      ),
       const SizedBox(width: AppSpacing.s),
       Text(
         label,
-        style: const TextStyle(
-          color: AppColors.textPrimary,
+        style: TextStyle(
+          color: muted ? AppColors.textSubtle : AppColors.textPrimary,
           fontSize: 14,
           fontWeight: FontWeight.w600,
         ),
       ),
     ],
   );
+}
+
+class _TerminalMenuItem extends StatelessWidget {
+  const _TerminalMenuItem({
+    required this.index,
+    required this.active,
+    required this.terminalLabel,
+  });
+
+  final int index;
+  final bool active;
+  final String terminalLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.secondary;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            '$terminalLabel $index',
+            style: TextStyle(
+              color: active ? accent : AppColors.textPrimary,
+              fontSize: 12,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ),
+        if (active)
+          Padding(
+            padding: const EdgeInsets.only(left: AppSpacing.s),
+            child: Icon(Icons.check_rounded, size: 18, color: accent),
+          ),
+      ],
+    );
+  }
 }
 
 class _ProjectTab extends StatelessWidget {

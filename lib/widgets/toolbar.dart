@@ -11,6 +11,7 @@ class Toolbar extends StatefulWidget {
     required this.onPaste,
     required this.onCopy,
     required this.onUpload,
+    required this.onVoiceInput,
     required this.keyboardVisible,
     required this.bottomInset,
     required this.onToggleKeyboard,
@@ -20,6 +21,7 @@ class Toolbar extends StatefulWidget {
   final VoidCallback onPaste;
   final VoidCallback onCopy;
   final VoidCallback onUpload;
+  final VoidCallback onVoiceInput;
   final bool keyboardVisible;
   final double bottomInset;
   final VoidCallback onToggleKeyboard;
@@ -89,10 +91,10 @@ class _ToolbarState extends State<Toolbar> {
         onTap: () => _send('\u001b'),
       ),
       _ToolItem(
-        icon: Icons.keyboard_tab_rounded,
-        label: 'tab',
+        icon: Icons.mic_none_rounded,
+        label: prefs.t('toolbar.voice'),
         kind: _ToolKind.special,
-        onTap: () => _send('\t'),
+        onTap: widget.onVoiceInput,
       ),
       _ToolItem(
         icon: Icons.content_copy_rounded,
