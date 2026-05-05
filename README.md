@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/duxweb/codux-flutter/releases">
-    <img src="https://img.shields.io/badge/version-0.1.4-22d3ee?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.1.5-22d3ee?style=flat-square" alt="Version">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-GPLv3-blue?style=flat-square" alt="License">

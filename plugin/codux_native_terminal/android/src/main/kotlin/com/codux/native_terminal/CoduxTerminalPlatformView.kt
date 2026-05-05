@@ -32,6 +32,7 @@ class CoduxTerminalPlatformView(
     )
     private var events: EventChannel.EventSink? = null
     private val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    private var lastResizeEvent: Pair<Int, Int>? = null
 
     init {
         terminalView.setRemoteClient(object : RemoteTerminalView.RemoteClient {
@@ -46,14 +47,7 @@ class CoduxTerminalPlatformView(
             }
 
             override fun onResize(columns: Int, rows: Int) {
-                CoduxTerminalLog.d("CoduxNativeTerminal", "resize cols=$columns rows=$rows")
-                events?.success(
-                    mapOf(
-                        "type" to "resize",
-                        "cols" to columns,
-                        "rows" to rows,
-                    ),
-                )
+                emitResize(columns, rows)
             }
         })
         terminalView.setScreenMetricsListener { rows, cursorRow, cursorBottomPx, historyRows, topRow ->
@@ -111,7 +105,7 @@ class CoduxTerminalPlatformView(
             "resize" -> {
                 terminalView.post {
                     terminalView.updateSize()
-                    emitCurrentResize()
+                    emitCurrentResize(force = true)
                 }
                 result.success(null)
             }
@@ -128,7 +122,7 @@ class CoduxTerminalPlatformView(
         CoduxTerminalLog.d("CoduxNativeTerminal", "events attached")
         terminalView.post {
             terminalView.updateSize()
-            emitCurrentResize()
+            emitCurrentResize(force = true)
         }
     }
 
@@ -143,10 +137,18 @@ class CoduxTerminalPlatformView(
         events = null
     }
 
-    private fun emitCurrentResize() {
+    private fun emitCurrentResize(force: Boolean = false) {
         val columns = terminalView.terminalColumns
         val rows = terminalView.terminalRows
         if (columns <= 0 || rows <= 0) return
+        emitResize(columns, rows, force = force)
+    }
+
+    private fun emitResize(columns: Int, rows: Int, force: Boolean = false) {
+        if (columns <= 0 || rows <= 0) return
+        val next = Pair(columns, rows)
+        if (!force && lastResizeEvent == next) return
+        lastResizeEvent = next
         CoduxTerminalLog.d("CoduxNativeTerminal", "emit current resize cols=$columns rows=$rows")
         events?.success(
             mapOf(

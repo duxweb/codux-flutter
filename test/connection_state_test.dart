@@ -35,9 +35,9 @@ void main() {
 
     expect(find.text('同步中'), findsWidgets);
     _emitHostReady(relay.channels.single);
-    await _pumpUntil(tester, () => find.text('已连接').evaluate().isNotEmpty);
+    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
 
-    expect(find.text('已连接'), findsWidgets);
+    expect(find.text('中继'), findsWidgets);
     expect(find.text('未连接'), findsNothing);
   });
 
@@ -67,14 +67,80 @@ void main() {
     await tester.pump();
     expect(find.text('同步中'), findsWidgets);
     _emitHostReady(second);
-    await _pumpUntil(tester, () => find.text('已连接').evaluate().isNotEmpty);
-    expect(find.text('已连接'), findsWidgets);
+    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
+    expect(find.text('中继'), findsWidgets);
 
     first.closeFromServer();
     await tester.pump();
 
-    expect(find.text('已连接'), findsWidgets);
+    expect(find.text('中继'), findsWidgets);
     expect(find.text('未连接'), findsNothing);
+  });
+
+  testWidgets('active socket close keeps last transport visible during grace', (
+    tester,
+  ) async {
+    final relay = _FakeRelayFactory();
+
+    await tester.pumpWidget(
+      CoduxFlutterApp(
+        relaySocketFactory: relay.call,
+        initialDevices: [_device()],
+      ),
+    );
+    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
+    final channel = relay.channels.single;
+
+    channel.emit({
+      'type': 'hello',
+      'payload': {'role': 'client'},
+    });
+    await tester.pump();
+    _emitHostReady(channel);
+    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
+
+    channel.closeFromServer();
+    await tester.pump();
+
+    expect(find.text('中继'), findsWidgets);
+    expect(find.text('未连接'), findsNothing);
+  });
+
+  testWidgets('reconnect refresh keeps existing host snapshot visible', (
+    tester,
+  ) async {
+    final relay = _FakeRelayFactory();
+
+    await tester.pumpWidget(
+      CoduxFlutterApp(
+        relaySocketFactory: relay.call,
+        initialDevices: [_device()],
+      ),
+    );
+    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
+    final first = relay.channels.single;
+
+    first.emit({
+      'type': 'hello',
+      'payload': {'role': 'client'},
+    });
+    await tester.pump();
+    _emitHostReady(first);
+    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
+
+    first.closeFromServer();
+    await tester.pump(const Duration(milliseconds: 850));
+    await _pumpUntil(tester, () => relay.channels.length == 2);
+    final second = relay.channels.last;
+
+    second.emit({
+      'type': 'hello',
+      'payload': {'role': 'client'},
+    });
+    await tester.pump();
+
+    expect(find.text('中继'), findsWidgets);
+    expect(find.text('同步中'), findsNothing);
   });
 
   testWidgets(

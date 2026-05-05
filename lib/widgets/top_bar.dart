@@ -26,7 +26,9 @@ class TopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final prefs = AppPreferences.of(context);
     final dotColor = connected ? AppColors.success : AppColors.danger;
-    final subtitle = connected ? prefs.t('app.connected') : status;
+    final subtitle = connected && status.isEmpty
+        ? prefs.t('app.connected')
+        : status;
     return Container(
       padding: EdgeInsets.only(top: topInset),
       height: AppLayout.topBarHeight + topInset,

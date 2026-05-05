@@ -50,6 +50,10 @@ class CoduxNativeTerminalController {
   final MethodChannel _methods;
   final EventChannel _events;
   StreamSubscription<dynamic>? _subscription;
+  CoduxTerminalInputCallback? _onInput;
+  CoduxTerminalResponseCallback? _onTerminalResponse;
+  CoduxTerminalResizeCallback? _onResize;
+  CoduxTerminalMetricsCallback? _onMetrics;
   bool _disposed = false;
 
   Future<void> write(String data) async {
@@ -88,25 +92,29 @@ class CoduxNativeTerminalController {
     CoduxTerminalResizeCallback? onResize,
     CoduxTerminalMetricsCallback? onMetrics,
   }) {
-    _subscription?.cancel();
+    _onInput = onInput;
+    _onTerminalResponse = onTerminalResponse;
+    _onResize = onResize;
+    _onMetrics = onMetrics;
+    if (_subscription != null) return;
     _subscription = _events.receiveBroadcastStream().listen((event) {
       if (event is! Map) return;
       switch (event['type']) {
         case 'input':
           final data = event['data']?.toString() ?? '';
-          if (data.isNotEmpty) onInput?.call(data);
+          if (data.isNotEmpty) _onInput?.call(data);
           break;
         case 'response':
           final data = event['data']?.toString() ?? '';
-          if (data.isNotEmpty) onTerminalResponse?.call(data);
+          if (data.isNotEmpty) _onTerminalResponse?.call(data);
           break;
         case 'resize':
           final cols = (event['cols'] as num?)?.toInt() ?? 0;
           final rows = (event['rows'] as num?)?.toInt() ?? 0;
-          if (cols > 0 && rows > 0) onResize?.call(cols, rows);
+          if (cols > 0 && rows > 0) _onResize?.call(cols, rows);
           break;
         case 'metrics':
-          onMetrics?.call(CoduxTerminalMetrics.fromMap(event));
+          _onMetrics?.call(CoduxTerminalMetrics.fromMap(event));
           break;
       }
     });

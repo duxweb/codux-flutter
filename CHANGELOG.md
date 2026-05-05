@@ -4,6 +4,28 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-05-05
+
+### Added
+
+- Added shared Mac terminal split support, including mobile split switching, creation, deletion, history replay, and mobile-driven resize.
+- Added WebRTC DataChannel P2P transport for remote terminal traffic with STUN direct connection first and WebSocket relay fallback.
+- Added local sherpa_onnx voice input with an in-app waveform overlay and editable recognition preview.
+- Added terminal input payload normalization so paste, voice, typed text, and control keys use stable insertion paths.
+
+### Changed
+
+- Replaced Android native speech recognition with the local voice model flow.
+- Updated P2P STUN ordering to prefer a domestic STUN server for Chinese language environments while retaining global fallbacks.
+- Improved connection-state grace handling so transient reconnects keep the paired-device list observable instead of flashing disconnected state.
+
+### Fixed
+
+- Fixed repeated terminal input from IME composition, paste, and voice-send paths.
+- Fixed extra blank lines from remote Enter handling when using shared Mac terminal sessions.
+- Fixed terminal history loading and background project/session synchronization after Mac restarts or mobile project switching.
+- Fixed native terminal event subscriptions and duplicate resize events after Android platform-view recreation.
+
 ## [0.1.4] - 2026-04-28
 
 ### Changed

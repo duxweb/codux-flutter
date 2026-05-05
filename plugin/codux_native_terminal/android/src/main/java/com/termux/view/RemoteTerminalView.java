@@ -535,8 +535,6 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
             public boolean finishComposingText() {
                 if (TERMINAL_VIEW_KEY_LOGGING_ENABLED) mClient.logInfo(LOG_TAG, "IME: finishComposingText()");
                 super.finishComposingText();
-
-                sendTextToTerminal(getEditable());
                 getEditable().clear();
                 return true;
             }
@@ -550,9 +548,8 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
 
                 if (mEmulator == null) return true;
 
-                Editable content = getEditable();
-                sendTextToTerminal(content);
-                content.clear();
+                sendTextToTerminal(text);
+                getEditable().clear();
                 return true;
             }
 
