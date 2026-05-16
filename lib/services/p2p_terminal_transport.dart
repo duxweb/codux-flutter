@@ -22,25 +22,32 @@ class P2PTerminalTransport {
        _preferDomesticStun = preferDomesticStun;
 
   static const channelLabel = 'codux-terminal';
+  static const uploadChannelLabel = 'codux-upload';
   static const _domesticStunUrls = ['stun:stun.miwifi.com:3478'];
   static const _globalStunUrls = [
     'stun:stun.l.google.com:19302',
     'stun:global.stun.twilio.com:3478',
   ];
+  static const _terminalBufferedAmountHighWatermark = 192 * 1024;
+  static const _terminalBufferedAmountLowWatermark = 48 * 1024;
+  static const _bufferedAmountHighWatermark = 512 * 1024;
+  static const _bufferedAmountLowWatermark = 128 * 1024;
 
   final P2PSignalSender _sendSignal;
   final P2PEnvelopeHandler _onEnvelope;
   final P2PStateHandler? _onState;
   RTCPeerConnection? _peer;
   RTCDataChannel? _channel;
+  RTCDataChannel? _uploadChannel;
   bool _starting = false;
   bool _remoteDescriptionSet = false;
   final List<RTCIceCandidate> _pendingCandidates = [];
   String _state = 'idle';
   bool _preferDomesticStun;
+  Timer? _disconnectTimer;
 
   String get state => _state;
-  bool get isOpen => _channel?.state == RTCDataChannelState.RTCDataChannelOpen;
+  bool get isOpen => _isChannelOpen(_channel);
 
   void setPreferDomesticStun(bool value) {
     _preferDomesticStun = value;
@@ -77,12 +84,18 @@ class P2PTerminalTransport {
       peer.onConnectionState = (state) {
         switch (state) {
           case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+            _disconnectTimer?.cancel();
+            _disconnectTimer = null;
             _setState('connected');
           case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
+            _disconnectTimer?.cancel();
+            _disconnectTimer = null;
             _setState('failed');
           case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
-            _setState('disconnected');
+            _scheduleDisconnectGrace();
           case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
+            _disconnectTimer?.cancel();
+            _disconnectTimer = null;
             _setState('closed');
           default:
             break;
@@ -94,7 +107,14 @@ class P2PTerminalTransport {
           ..ordered = true
           ..binaryType = 'text',
       );
-      _attachChannel(channel);
+      _attachChannel(channel, primary: true);
+      final uploadChannel = await peer.createDataChannel(
+        uploadChannelLabel,
+        RTCDataChannelInit()
+          ..ordered = true
+          ..binaryType = 'text',
+      );
+      _attachChannel(uploadChannel, upload: true);
       final offer = await peer.createOffer({});
       await peer.setLocalDescription(offer);
       _sendSignal(
@@ -148,22 +168,143 @@ class P2PTerminalTransport {
   }
 
   bool sendEnvelope(RelayEnvelope message) {
-    final channel = _channel;
-    if (channel == null ||
-        channel.state != RTCDataChannelState.RTCDataChannelOpen) {
+    final channel = _channelForMessage(message);
+    if (!_isChannelOpen(channel)) {
+      if (_isUploadMessage(message) && _isChannelOpen(_channel)) {
+        return _sendOnChannel(_channel!, message);
+      }
       return false;
     }
-    channel.send(RTCDataChannelMessage(jsonEncode(message.toJson())));
+    return _sendOnChannel(channel!, message);
+  }
+
+  bool _sendOnChannel(RTCDataChannel channel, RelayEnvelope message) {
+    unawaited(
+      channel
+          .send(RTCDataChannelMessage(jsonEncode(message.toJson())))
+          .catchError((Object error) {
+            CoduxLog.warn('[codux-flutter-p2p] send failed: $error');
+          }),
+    );
     return true;
   }
 
+  Future<bool> sendEnvelopeWithBackpressure(RelayEnvelope message) async {
+    if (!await waitForBufferedAmountLow(upload: _isUploadMessage(message))) {
+      return false;
+    }
+    return sendEnvelope(message);
+  }
+
+  Future<bool> waitUntilOpen({
+    Duration timeout = const Duration(milliseconds: 1500),
+  }) async {
+    if (isOpen) return true;
+    final completer = Completer<bool>();
+    final timeoutTimer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        completer.complete(isOpen);
+      }
+    });
+    final pollTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (isOpen && !completer.isCompleted) {
+        completer.complete(true);
+      }
+    });
+    try {
+      return await completer.future;
+    } finally {
+      timeoutTimer.cancel();
+      pollTimer.cancel();
+    }
+  }
+
+  Future<bool> waitForBufferedAmountLow({
+    bool upload = false,
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final channel = upload && _isChannelOpen(_uploadChannel)
+        ? _uploadChannel
+        : _channel;
+    if (!_isChannelOpen(channel)) {
+      return false;
+    }
+    final highWatermark = upload
+        ? _bufferedAmountHighWatermark
+        : _terminalBufferedAmountHighWatermark;
+    final lowWatermark = upload
+        ? _bufferedAmountLowWatermark
+        : _terminalBufferedAmountLowWatermark;
+    int amount;
+    try {
+      amount = await channel!.getBufferedAmount();
+    } catch (_) {
+      amount = channel!.bufferedAmount ?? 0;
+    }
+    if (amount <= highWatermark) return true;
+
+    final completer = Completer<bool>();
+    final previousLow = channel.onBufferedAmountLow;
+    final previousChange = channel.onBufferedAmountChange;
+    void completeIfLow(int currentAmount) {
+      if (currentAmount > lowWatermark || completer.isCompleted) {
+        return;
+      }
+      completer.complete(true);
+    }
+
+    channel.bufferedAmountLowThreshold = lowWatermark;
+    channel.onBufferedAmountLow = (currentAmount) {
+      previousLow?.call(currentAmount);
+      completeIfLow(currentAmount);
+    };
+    channel.onBufferedAmountChange = (currentAmount, changedAmount) {
+      previousChange?.call(currentAmount, changedAmount);
+      completeIfLow(currentAmount);
+    };
+
+    Timer? pollTimer;
+    pollTimer = Timer.periodic(const Duration(milliseconds: 100), (_) async {
+      final current = upload && channel == _uploadChannel
+          ? _uploadChannel
+          : _channel;
+      if (current != channel ||
+          current?.state != RTCDataChannelState.RTCDataChannelOpen) {
+        if (!completer.isCompleted) completer.complete(false);
+        return;
+      }
+      try {
+        completeIfLow(await channel.getBufferedAmount());
+      } catch (_) {
+        completeIfLow(channel.bufferedAmount ?? 0);
+      }
+    });
+
+    try {
+      return await completer.future.timeout(timeout, onTimeout: () => false);
+    } finally {
+      pollTimer.cancel();
+      if (_channel == channel || _uploadChannel == channel) {
+        channel.onBufferedAmountLow = previousLow;
+        channel.onBufferedAmountChange = previousChange;
+      }
+    }
+  }
+
   Future<void> close() async {
+    _disconnectTimer?.cancel();
+    _disconnectTimer = null;
     _remoteDescriptionSet = false;
     _pendingCandidates.clear();
     final channel = _channel;
     _channel = null;
     if (channel != null) {
       await channel.close();
+    }
+    final uploadChannel = _uploadChannel;
+    _uploadChannel = null;
+    if (uploadChannel != null && uploadChannel != channel) {
+      await uploadChannel.close();
     }
     final peer = _peer;
     _peer = null;
@@ -174,14 +315,23 @@ class P2PTerminalTransport {
     _setState('closed');
   }
 
-  void _attachChannel(RTCDataChannel channel) {
-    _channel = channel;
+  void _attachChannel(
+    RTCDataChannel channel, {
+    bool primary = false,
+    bool upload = false,
+  }) {
+    if (primary) {
+      _channel = channel;
+    }
+    if (upload) {
+      _uploadChannel = channel;
+    }
     channel.onDataChannelState = (state) {
       switch (state) {
         case RTCDataChannelState.RTCDataChannelOpen:
-          _setState('connected');
+          if (channel == _channel) _setState('connected');
         case RTCDataChannelState.RTCDataChannelClosed:
-          _setState('closed');
+          if (channel == _channel) _setState('closed');
         default:
           break;
       }
@@ -198,9 +348,25 @@ class P2PTerminalTransport {
         CoduxLog.warn('[codux-flutter-p2p] drop malformed message: $error');
       }
     };
-    if (channel.state == RTCDataChannelState.RTCDataChannelOpen) {
+    if (channel == _channel &&
+        channel.state == RTCDataChannelState.RTCDataChannelOpen) {
       _setState('connected');
     }
+  }
+
+  RTCDataChannel? _channelForMessage(RelayEnvelope message) {
+    if (_isUploadMessage(message) && _isChannelOpen(_uploadChannel)) {
+      return _uploadChannel;
+    }
+    return _channel;
+  }
+
+  bool _isUploadMessage(RelayEnvelope message) {
+    return message.type.startsWith('terminal.upload.');
+  }
+
+  bool _isChannelOpen(RTCDataChannel? channel) {
+    return channel?.state == RTCDataChannelState.RTCDataChannelOpen;
   }
 
   List<String> _stunUrls() {
@@ -214,5 +380,15 @@ class P2PTerminalTransport {
     if (_state == next) return;
     _state = next;
     _onState?.call(next);
+  }
+
+  void _scheduleDisconnectGrace() {
+    if (_state == 'disconnected' || _state == 'closed') return;
+    _disconnectTimer?.cancel();
+    _disconnectTimer = Timer(const Duration(seconds: 5), () {
+      _disconnectTimer = null;
+      if (_peer == null || isOpen) return;
+      _setState('disconnected');
+    });
   }
 }

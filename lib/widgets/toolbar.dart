@@ -13,6 +13,7 @@ class Toolbar extends StatefulWidget {
     required this.onUpload,
     required this.onVoiceInput,
     required this.keyboardVisible,
+    required this.uploading,
     required this.bottomInset,
     required this.onToggleKeyboard,
   });
@@ -23,6 +24,7 @@ class Toolbar extends StatefulWidget {
   final VoidCallback onUpload;
   final VoidCallback onVoiceInput;
   final bool keyboardVisible;
+  final bool uploading;
   final double bottomInset;
   final VoidCallback onToggleKeyboard;
 
@@ -112,6 +114,7 @@ class _ToolbarState extends State<Toolbar> {
         icon: Icons.upload_file_rounded,
         label: prefs.t('toolbar.upload'),
         kind: _ToolKind.special,
+        busy: widget.uploading,
         onTap: widget.onUpload,
       ),
       _ToolItem(
@@ -213,6 +216,7 @@ class _ToolItem {
     required this.onTap,
     this.active = false,
     this.repeatable = false,
+    this.busy = false,
   }) : assert(icon != null || label != null);
 
   final IconData? icon;
@@ -221,6 +225,7 @@ class _ToolItem {
   final VoidCallback onTap;
   final bool active;
   final bool repeatable;
+  final bool busy;
 }
 
 class _ToolGrid extends StatelessWidget {
@@ -322,18 +327,28 @@ class _ToolButtonState extends State<_ToolButton> {
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
-        onTapDown: (_) => _startRepeat(),
-        onTapUp: (_) => _stopRepeat(),
-        onTapCancel: _stopRepeat,
-        onTap: item.onTap,
+        onTapDown: item.busy ? null : (_) => _startRepeat(),
+        onTapUp: item.busy ? null : (_) => _stopRepeat(),
+        onTapCancel: item.busy ? null : _stopRepeat,
+        onTap: item.busy ? null : item.onTap,
         child: Semantics(
           label: item.label,
           button: true,
+          enabled: !item.busy,
           child: Container(
             width: double.infinity,
             height: double.infinity,
             alignment: Alignment.center,
-            child: item.icon != null
+            child: item.busy
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: foreground,
+                    ),
+                  )
+                : item.icon != null
                 ? Icon(
                     item.icon,
                     size: item.kind == _ToolKind.enter ? 20 : 17,

@@ -6,8 +6,8 @@ typedef TerminalInputTimerFactory =
 class TerminalInputBatcher {
   TerminalInputBatcher({
     required this.send,
-    this.flushDelay = const Duration(milliseconds: 10),
-    this.maxBatchCharacters = 256,
+    this.flushDelay = const Duration(milliseconds: 2),
+    this.maxBatchCharacters = 128,
     TerminalInputTimerFactory? timerFactory,
   }) : _timerFactory = timerFactory ?? Timer.new;
 
@@ -62,6 +62,7 @@ class TerminalInputBatcher {
   }
 
   bool _shouldSendImmediately(String data) {
+    if (data.runes.length == 1) return true;
     for (final codeUnit in data.codeUnits) {
       if (codeUnit < 0x20 || codeUnit == 0x7f) return true;
     }

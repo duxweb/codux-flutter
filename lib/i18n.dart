@@ -270,6 +270,7 @@ const Map<String, String> _zhCN = {
   'terminal.loadingHistory': '正在加载终端历史...',
   'terminal.rebuilding': '正在重建终端',
   'upload.imageUploading': '正在上传图片...',
+  'upload.imageInserting': '正在插入图片...',
   'upload.imageSentTool': '图片已上传，并通过 {tool} 粘贴快捷键发送',
   'upload.imageSentPath': '图片已上传，并粘贴临时路径',
   'upload.aiTool': 'AI 工具',
@@ -412,6 +413,11 @@ const Map<String, String> _zhTW = {
   'settings.localeLabel': '語言',
   'settings.save': '儲存設定',
   'settings.saved': '設定已儲存',
+  'upload.imageUploading': '正在上傳圖片...',
+  'upload.imageInserting': '正在插入圖片...',
+  'upload.imageSentTool': '圖片已上傳，並透過 {tool} 貼上快捷鍵送出',
+  'upload.imageSentPath': '圖片已上傳，並貼上暫存路徑',
+  'upload.aiTool': 'AI 工具',
   'cmd.hint': '命令（備用輸入）',
 };
 
@@ -577,6 +583,7 @@ const Map<String, String> _en = {
   'terminal.loadingHistory': 'Loading terminal history...',
   'terminal.rebuilding': 'Rebuilding terminal',
   'upload.imageUploading': 'Uploading image...',
+  'upload.imageInserting': 'Inserting image...',
   'upload.imageSentTool':
       'Image uploaded and sent through {tool} paste shortcut',
   'upload.imageSentPath': 'Image uploaded and temporary path pasted',

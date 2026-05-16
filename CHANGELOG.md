@@ -4,6 +4,21 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-05-16
+
+### Changed
+
+- Changed Android release and manual release builds to package only the `arm64-v8a` APK artifact.
+- Improved terminal transport stability with a reliable host-response probe so relay-only connections no longer appear as a live Mac session.
+- Improved WebRTC terminal transport backpressure, reconnect handling, and relay fallback behavior for low-traffic sessions.
+- Improved image upload UX with chunked terminal uploads, progress feedback, and a persistent loading state until the image is inserted.
+
+### Fixed
+
+- Fixed Mac-offline detection so the mobile app moves from connecting to connection failed instead of looping through syncing and relay states.
+- Fixed foreground resume recovery by refreshing host snapshots and replaying cached terminal output after the app returns from the background.
+- Fixed duplicate terminal input/output handling with input acknowledgements and output sequence acknowledgements.
+
 ## [0.1.5] - 2026-05-05
 
 ### Added

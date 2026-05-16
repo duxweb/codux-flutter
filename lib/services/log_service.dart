@@ -13,6 +13,7 @@ class CoduxLog {
   static final CoduxLogLevel level = _parse(_levelName);
 
   static String get nativeLevelName => level.name;
+  static bool get isDebugEnabled => _enabled(CoduxLogLevel.debug);
 
   static void debug(String message) => _print(CoduxLogLevel.debug, message);
 

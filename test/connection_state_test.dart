@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:codux_flutter/main.dart';
 import 'package:codux_flutter/models/remote_models.dart';
@@ -13,7 +14,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('device home syncs after relay hello before host snapshots', (
+  testWidgets('device home waits for host snapshots after relay hello', (
     tester,
   ) async {
     final relay = _FakeRelayFactory();
@@ -33,7 +34,8 @@ void main() {
     });
     await tester.pump();
 
-    expect(find.text('同步中'), findsWidgets);
+    expect(find.text('连接中...'), findsWidgets);
+    expect(find.text('同步中'), findsNothing);
     _emitHostReady(relay.channels.single);
     await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
 
@@ -65,7 +67,6 @@ void main() {
       'payload': {'role': 'client'},
     });
     await tester.pump();
-    expect(find.text('同步中'), findsWidgets);
     _emitHostReady(second);
     await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
     expect(find.text('中继'), findsWidgets);
@@ -138,6 +139,8 @@ void main() {
       'payload': {'role': 'client'},
     });
     await tester.pump();
+    _emitHostReady(second);
+    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
 
     expect(find.text('中继'), findsWidgets);
     expect(find.text('同步中'), findsNothing);
@@ -199,6 +202,105 @@ void main() {
       expect(relay.channels.single.sink.sent.length, greaterThan(initialCount));
     },
   );
+
+  testWidgets('foreground resume refreshes host snapshots on existing socket', (
+    tester,
+  ) async {
+    final relay = _FakeRelayFactory();
+
+    await tester.pumpWidget(
+      CoduxFlutterApp(
+        relaySocketFactory: relay.call,
+        initialDevices: [_device()],
+      ),
+    );
+    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
+    final channel = relay.channels.single;
+
+    channel.emit({
+      'type': 'hello',
+      'payload': {'role': 'client'},
+    });
+    await tester.pump();
+    _emitHostReady(channel);
+    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
+
+    final before = channel.sink.sent.length;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(find.text('连接中...'), findsWidgets);
+    _emitHostReady(channel);
+    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
+
+    expect(channel.sink.sent.length, greaterThan(before));
+    expect(find.text('中继'), findsWidgets);
+    expect(find.text('未连接'), findsNothing);
+  });
+
+  testWidgets('foreground resume reconnects when existing socket is stale', (
+    tester,
+  ) async {
+    final relay = _FakeRelayFactory();
+
+    await tester.pumpWidget(
+      CoduxFlutterApp(
+        relaySocketFactory: relay.call,
+        initialDevices: [_device()],
+      ),
+    );
+    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
+    final channel = relay.channels.single;
+
+    channel.emit({
+      'type': 'hello',
+      'payload': {'role': 'client'},
+    });
+    await tester.pump();
+    _emitHostReady(channel);
+    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(milliseconds: 6100));
+    expect(find.text('连接失败，后台重试中'), findsWidgets);
+    await tester.pump(const Duration(milliseconds: 850));
+
+    expect(relay.channels.length, 2);
+    expect(find.text('中继'), findsNothing);
+  });
+
+  testWidgets('relay hello without host response becomes connection failed', (
+    tester,
+  ) async {
+    final relay = _FakeRelayFactory();
+
+    await tester.pumpWidget(
+      CoduxFlutterApp(
+        relaySocketFactory: relay.call,
+        initialDevices: [_device()],
+      ),
+    );
+    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
+
+    relay.channels.single.emit({
+      'type': 'hello',
+      'payload': {'role': 'client'},
+    });
+    await tester.pump();
+
+    expect(find.text('连接中...'), findsWidgets);
+    expect(find.text('同步中'), findsNothing);
+    expect(find.text('中继'), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 6100));
+
+    expect(find.text('连接失败，后台重试中'), findsWidgets);
+    expect(find.text('同步中'), findsNothing);
+    expect(find.text('中继'), findsNothing);
+  });
 }
 
 void _emitHostReady(_FakeRelayChannel channel) {

@@ -4,7 +4,7 @@ import 'package:codux_flutter/services/terminal_input_batcher.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('coalesces printable input until delay fires', () {
+  test('sends single printable keystrokes immediately', () {
     final timers = <_FakeTimer>[];
     final sent = <String>[];
     final batcher = TerminalInputBatcher(
@@ -19,12 +19,32 @@ void main() {
     batcher.add('l');
     batcher.add('s');
 
+    expect(sent, ['l', 's']);
+    expect(batcher.hasPendingData, isFalse);
+    expect(timers, isEmpty);
+  });
+
+  test('coalesces multi-character printable input until delay fires', () {
+    final timers = <_FakeTimer>[];
+    final sent = <String>[];
+    final batcher = TerminalInputBatcher(
+      send: sent.add,
+      timerFactory: (delay, callback) {
+        final timer = _FakeTimer(callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+
+    batcher.add('gi');
+    batcher.add('t ');
+
     expect(sent, isEmpty);
-    expect(batcher.pendingData, 'ls');
+    expect(batcher.pendingData, 'git ');
 
     timers.last.fire();
 
-    expect(sent, ['ls']);
+    expect(sent, ['git ']);
     expect(batcher.hasPendingData, isFalse);
   });
 
@@ -51,12 +71,12 @@ void main() {
 
   test('flushes when batch reaches size limit', () {
     final sent = <String>[];
-    final batcher = TerminalInputBatcher(send: sent.add, maxBatchCharacters: 3);
+    final batcher = TerminalInputBatcher(send: sent.add, maxBatchCharacters: 4);
 
-    batcher.add('a');
-    batcher.add('bc');
+    batcher.add('ab');
+    batcher.add('cd');
 
-    expect(sent, ['abc']);
+    expect(sent, ['abcd']);
     expect(batcher.hasPendingData, isFalse);
   });
 
