@@ -4,6 +4,19 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-05-22
+
+### Added
+
+- Added iOS TestFlight release automation with App Store Connect upload support.
+- Added the native iOS terminal adapter backed by Ghostty so iOS uses the same Dart terminal session flow as Android.
+- Added connection latency display to the device list and terminal header.
+
+### Changed
+
+- Updated iOS release signing, bundle metadata, app icons, launch images, and App Store update checks for TestFlight distribution.
+- Refined scanner pairing and paste labels to avoid overflow in compact mobile layouts.
+
 ## [0.1.6] - 2026-05-16
 
 ### Changed

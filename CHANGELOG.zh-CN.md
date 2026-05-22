@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-05-22
+
+### 新增
+
+- 新增 iOS TestFlight 发布自动化，支持上传到 App Store Connect。
+- 新增基于 Ghostty 的 iOS 原生终端适配器，iOS 与 Android 共用 Dart 侧终端会话流程。
+- 新增设备列表和终端标题栏延迟显示。
+
+### 调整
+
+- 完善 iOS 发布签名、Bundle 元数据、应用图标、启动图和 App Store 更新检查，支持 TestFlight 分发。
+- 优化扫码配对和粘贴相关文案，避免紧凑移动端布局下溢出。
+
 ## [0.1.6] - 2026-05-16
 
 ### 调整
