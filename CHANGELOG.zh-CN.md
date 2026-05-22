@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-05-22
+
+### 修复
+
+- 固定 `device_info_plus` 到兼容当前 iOS SDK 的版本，确保 GitHub Actions 可以正常归档 iOS TestFlight 构建。
+
 ## [0.1.7] - 2026-05-22
 
 ### 新增

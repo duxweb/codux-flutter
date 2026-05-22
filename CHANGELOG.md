@@ -4,6 +4,12 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-05-22
+
+### Fixed
+
+- Pinned `device_info_plus` to an iOS SDK-compatible version so GitHub Actions can archive the iOS TestFlight build.
+
 ## [0.1.7] - 2026-05-22
 
 ### Added
