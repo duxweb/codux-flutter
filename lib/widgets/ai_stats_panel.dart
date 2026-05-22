@@ -701,7 +701,7 @@ String _formatInt(int value) {
 }
 
 String _formatDate(String raw) {
-  final parsed = DateTime.tryParse(raw);
+  final parsed = _parseDateValue(raw);
   if (parsed != null) {
     final local = parsed.toLocal();
     return '${local.year.toString().padLeft(4, '0')}-'
@@ -713,7 +713,7 @@ String _formatDate(String raw) {
 }
 
 String _formatDateTime(String raw) {
-  final parsed = DateTime.tryParse(raw);
+  final parsed = _parseDateValue(raw);
   if (parsed != null) {
     final local = parsed.toLocal();
     return '${local.year.toString().padLeft(4, '0')}-'
@@ -723,6 +723,16 @@ String _formatDateTime(String raw) {
         '${local.minute.toString().padLeft(2, '0')}';
   }
   return raw;
+}
+
+DateTime? _parseDateValue(String raw) {
+  final parsed = DateTime.tryParse(raw);
+  if (parsed != null) return parsed;
+  final numeric = double.tryParse(raw);
+  if (numeric == null || !numeric.isFinite || numeric <= 0) return null;
+  final value = numeric.round();
+  final millis = value >= 1000000000000 ? value : value * 1000;
+  return DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true);
 }
 
 List<AIStatsTimeBucket> _normalizedTodayBuckets(

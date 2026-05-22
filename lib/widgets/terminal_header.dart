@@ -14,6 +14,8 @@ class TerminalHeader extends StatelessWidget {
     required this.onTerminal,
     required this.onStats,
     required this.onFiles,
+    this.latencyMs,
+    this.connected = true,
   });
 
   final double topInset;
@@ -25,6 +27,8 @@ class TerminalHeader extends StatelessWidget {
   final VoidCallback onTerminal;
   final VoidCallback onStats;
   final VoidCallback onFiles;
+  final int? latencyMs;
+  final bool connected;
 
   @override
   Widget build(BuildContext context) {
@@ -35,39 +39,87 @@ class TerminalHeader extends StatelessWidget {
         height: AppLayout.topBarHeight + topInset,
         padding: EdgeInsets.only(top: topInset),
         decoration: const BoxDecoration(color: AppColors.bgBase),
-        child: Row(
+        child: Stack(
           children: [
-            const SizedBox(width: AppSpacing.s),
-            SizedBox(
-              width: 44,
-              height: 44,
-              child: IconButton(
-                onPressed: onBack,
-                icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-                color: AppColors.textPrimary,
-              ),
-            ),
-            Expanded(
-              child: Center(
-                child: _ModeCapsule(
-                  accent: accent,
-                  activeMode: activeMode,
-                  onTerminal: onTerminal,
-                  onStats: onStats,
-                  onFiles: onFiles,
+            Positioned(
+              left: AppSpacing.s,
+              top: 6,
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: IconButton(
+                  onPressed: onBack,
+                  icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+                  color: AppColors.textPrimary,
                 ),
               ),
             ),
-            ProjectActionMenu(
-              onEditProject: onEditProject,
-              onAddProject: onAddProject,
-              onRemoveProject: onRemoveProject,
+            Center(
+              child: _ModeCapsule(
+                accent: accent,
+                activeMode: activeMode,
+                onTerminal: onTerminal,
+                onStats: onStats,
+                onFiles: onFiles,
+              ),
             ),
-            const SizedBox(width: AppSpacing.s),
+            Positioned(
+              right: AppSpacing.s,
+              top: 7,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _HeaderLatencyText(
+                    latencyMs: latencyMs,
+                    connected: connected,
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  ProjectActionMenu(
+                    onEditProject: onEditProject,
+                    onAddProject: onAddProject,
+                    onRemoveProject: onRemoveProject,
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
     );
+  }
+}
+
+class _HeaderLatencyText extends StatelessWidget {
+  const _HeaderLatencyText({required this.latencyMs, required this.connected});
+  final int? latencyMs;
+  final bool connected;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = connected && latencyMs != null ? '${latencyMs}ms' : '-- ms';
+    final color = _latencyColor(latencyMs, connected);
+    return SizedBox(
+      width: 44,
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.right,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          height: 1,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Color _latencyColor(int? value, bool connected) {
+    if (!connected || value == null) return AppColors.textSubtle;
+    if (value <= 120) return AppColors.success;
+    if (value <= 300) return AppColors.warning;
+    return AppColors.danger;
   }
 }
 

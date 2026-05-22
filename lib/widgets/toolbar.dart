@@ -46,6 +46,7 @@ class _ToolbarState extends State<Toolbar> {
 
   String _resolve(String data) {
     if (data == '\t' && _shift) return '\u001b[Z';
+    if (data == '\r' && _shift) return '\n';
     final arrow = _arrowMap[data];
     if (arrow != null) return _encodeModified(arrow);
     if (_ctrl && data.length == 1) {
@@ -91,6 +92,11 @@ class _ToolbarState extends State<Toolbar> {
         label: 'esc',
         kind: _ToolKind.special,
         onTap: () => _send('\u001b'),
+      ),
+      _ToolItem(
+        label: 'tab',
+        kind: _ToolKind.special,
+        onTap: () => _send('\t'),
       ),
       _ToolItem(
         icon: Icons.mic_none_rounded,
@@ -162,6 +168,7 @@ class _ToolbarState extends State<Toolbar> {
         active: _alt,
         onTap: () => setState(() => _alt = !_alt),
       ),
+      _ToolItem(label: '/', kind: _ToolKind.special, onTap: () => _send('/')),
       _ToolItem(
         icon: Icons.keyboard_arrow_left_rounded,
         label: '←',

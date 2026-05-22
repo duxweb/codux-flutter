@@ -55,20 +55,25 @@ class CoduxNativeTerminalController {
   CoduxTerminalResizeCallback? _onResize;
   CoduxTerminalMetricsCallback? _onMetrics;
   bool _disposed = false;
+  Future<void> _operationChain = Future<void>.value();
 
   Future<void> write(String data) async {
     if (data.isEmpty) return Future.value();
-    await _invokeVoid('write', {'data': data});
+    return _enqueueVoid('write', {'data': data});
   }
 
-  Future<void> clear() => _invokeVoid('clear');
+  Future<void> replace(String data) {
+    return _enqueueVoid('replace', {'data': data});
+  }
 
-  Future<void> focusKeyboard() => _invokeVoid('focusKeyboard');
+  Future<void> clear() => _enqueueVoid('clear');
 
-  Future<void> hideKeyboard() => _invokeVoid('hideKeyboard');
+  Future<void> focusKeyboard() => _enqueueVoid('focusKeyboard');
+
+  Future<void> hideKeyboard() => _enqueueVoid('hideKeyboard');
 
   Future<void> setScrollEnabled(bool enabled) {
-    return _invokeVoid('setScrollEnabled', {'enabled': enabled});
+    return _enqueueVoid('setScrollEnabled', {'enabled': enabled});
   }
 
   Future<bool> copySelection() async {
@@ -80,10 +85,10 @@ class CoduxNativeTerminalController {
     }
   }
 
-  Future<void> requestResize() => _invokeVoid('resize');
+  Future<void> requestResize() => _enqueueVoid('resize');
 
   Future<void> setLogLevel(String level) {
-    return _invokeVoid('setLogLevel', {'level': level});
+    return _enqueueVoid('setLogLevel', {'level': level});
   }
 
   void listen({
@@ -135,6 +140,16 @@ class CoduxNativeTerminalController {
       // callbacks are still pending. The next live view will report its size.
     }
   }
+
+  Future<void> _enqueueVoid(String method, [Object? arguments]) {
+    if (_disposed) return Future<void>.value();
+    final next = _operationChain.then(
+      (_) => _invokeVoid(method, arguments),
+      onError: (_) => _invokeVoid(method, arguments),
+    );
+    _operationChain = next.catchError((_) {});
+    return next;
+  }
 }
 
 class CoduxNativeTerminalView extends StatefulWidget {
@@ -185,33 +200,43 @@ class _CoduxNativeTerminalViewState extends State<CoduxNativeTerminalView> {
 
   @override
   Widget build(BuildContext context) {
-    if (defaultTargetPlatform != TargetPlatform.android) {
-      return const ColoredBox(
-        color: Color(0xFF05070A),
-        child: Center(
-          child: Text(
-            'Codux native terminal is Android-only for now.',
-            style: TextStyle(color: Color(0xFF94A3B8)),
-          ),
-        ),
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidView(
+        viewType: 'codux_native_terminal/terminal_view',
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: _handlePlatformViewCreated,
+        hitTestBehavior: PlatformViewHitTestBehavior.opaque,
       );
     }
-    return AndroidView(
-      viewType: 'codux_native_terminal/terminal_view',
-      creationParamsCodec: const StandardMessageCodec(),
-      onPlatformViewCreated: (viewId) {
-        final controller = CoduxNativeTerminalController._(viewId)
-          ..listen(
-            onInput: widget.onInput,
-            onTerminalResponse: widget.onTerminalResponse,
-            onResize: widget.onResize,
-            onMetrics: widget.onMetrics,
-          );
-        controller.setScrollEnabled(widget.scrollEnabled);
-        _controller = controller;
-        widget.onControllerCreated?.call(controller);
-      },
-      hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      return UiKitView(
+        viewType: 'codux_native_terminal/terminal_view',
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: _handlePlatformViewCreated,
+        hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+      );
+    }
+    return const ColoredBox(
+      color: Color(0xFF05070A),
+      child: Center(
+        child: Text(
+          'Codux native terminal is Android and iOS only for now.',
+          style: TextStyle(color: Color(0xFF94A3B8)),
+        ),
+      ),
     );
+  }
+
+  void _handlePlatformViewCreated(int viewId) {
+    final controller = CoduxNativeTerminalController._(viewId)
+      ..listen(
+        onInput: widget.onInput,
+        onTerminalResponse: widget.onTerminalResponse,
+        onResize: widget.onResize,
+        onMetrics: widget.onMetrics,
+      );
+    controller.setScrollEnabled(widget.scrollEnabled);
+    _controller = controller;
+    widget.onControllerCreated?.call(controller);
   }
 }

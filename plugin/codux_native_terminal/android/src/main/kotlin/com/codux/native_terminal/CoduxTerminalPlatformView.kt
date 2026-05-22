@@ -76,6 +76,13 @@ class CoduxTerminalPlatformView(
                 terminalView.writeRemote(data)
                 result.success(null)
             }
+            "replace" -> {
+                val data = call.argument<String>("data").orEmpty()
+                CoduxTerminalLog.d("CoduxNativeTerminal", "replace bytes=${data.toByteArray().size}")
+                terminalView.clearRemote()
+                terminalView.writeRemote(data)
+                result.success(null)
+            }
             "clear" -> {
                 terminalView.clearRemote()
                 result.success(null)

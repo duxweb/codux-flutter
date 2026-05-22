@@ -11,6 +11,7 @@ class DeviceHomeScreen extends StatelessWidget {
     required this.activeDeviceId,
     required this.connected,
     required this.status,
+    required this.latencyMs,
     required this.topInset,
     required this.bottomInset,
     required this.onOpen,
@@ -27,6 +28,7 @@ class DeviceHomeScreen extends StatelessWidget {
   final String? activeDeviceId;
   final bool connected;
   final String status;
+  final int? latencyMs;
   final double topInset;
   final double bottomInset;
   final ValueChanged<StoredDevice> onOpen;
@@ -111,6 +113,7 @@ class DeviceHomeScreen extends StatelessWidget {
                         device: device,
                         connected: isConnected,
                         status: state,
+                        latencyMs: isConnected ? latencyMs : null,
                         accent: accent,
                         onOpen: () => onOpen(device),
                         onConnect: () => onConnect(device),
@@ -209,6 +212,7 @@ class _SwipeDeviceTile extends StatefulWidget {
     required this.device,
     required this.connected,
     required this.status,
+    required this.latencyMs,
     required this.accent,
     required this.onOpen,
     required this.onConnect,
@@ -219,6 +223,7 @@ class _SwipeDeviceTile extends StatefulWidget {
   final StoredDevice device;
   final bool connected;
   final String status;
+  final int? latencyMs;
   final Color accent;
   final VoidCallback onOpen;
   final VoidCallback onConnect;
@@ -346,17 +351,27 @@ class _SwipeDeviceTileState extends State<_SwipeDeviceTile> {
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                     color: AppColors.textSubtle,
-                                    fontSize: 12,
+                                    fontSize: 11,
                                   ),
                                 ),
                               ],
                             ),
                           ),
                           const SizedBox(width: AppSpacing.s),
-                          _StatusPill(
-                            connected: widget.connected,
-                            status: widget.status,
-                            accent: widget.accent,
+                          Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              _TransportText(
+                                connected: widget.connected,
+                                status: widget.status,
+                              ),
+                              const SizedBox(height: 7),
+                              _LatencyText(
+                                latencyMs: widget.latencyMs,
+                                connected: widget.connected,
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -403,35 +418,52 @@ class _ActionButton extends StatelessWidget {
   );
 }
 
-class _StatusPill extends StatelessWidget {
-  const _StatusPill({
-    required this.connected,
-    required this.status,
-    required this.accent,
-  });
+class _TransportText extends StatelessWidget {
+  const _TransportText({required this.connected, required this.status});
   final bool connected;
   final String status;
-  final Color accent;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(
-        color: connected
-            ? AppColors.success.withValues(alpha: 0.14)
-            : AppColors.bgElevated,
-        borderRadius: BorderRadius.circular(999),
+    final isP2P = status.toUpperCase().contains('P2P');
+    final label = connected
+        ? (isP2P ? 'P2P' : AppPreferences.of(context).t('transport.relay'))
+        : status;
+    final color = !connected
+        ? AppColors.danger
+        : (isP2P ? AppColors.success : AppColors.cyan);
+    return Text(
+      label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: color,
+        fontSize: 12,
+        height: 1,
+        fontWeight: FontWeight.w800,
       ),
-      child: Text(
-        status,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: connected ? AppColors.success : AppColors.textMuted,
-          fontSize: AppTextSize.small,
-          fontWeight: FontWeight.w700,
-        ),
+    );
+  }
+}
+
+class _LatencyText extends StatelessWidget {
+  const _LatencyText({required this.latencyMs, required this.connected});
+  final int? latencyMs;
+  final bool connected;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = connected && latencyMs != null ? '${latencyMs}ms' : '-- ms';
+    final color = connected ? AppColors.textSubtle : AppColors.danger;
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: color,
+        fontSize: 11,
+        height: 1,
+        fontWeight: FontWeight.w600,
       ),
     );
   }

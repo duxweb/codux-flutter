@@ -26,8 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Codux uses the camera to scan pairing QR codes.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Codux uses the microphone for local voice input.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Codux uses the photo library to upload selected images to the terminal.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

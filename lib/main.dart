@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:device_info_plus/device_info_plus.dart';
@@ -144,6 +145,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   final Map<String, String> _terminalOutputCache = {};
   final Map<String, int> _terminalBufferLengths = {};
   final Map<String, int> _terminalOutputSeqBySession = {};
+  final Map<String, String> _lastTerminalIdByProject = {};
   double _terminalCursorBottom = 0;
   int? _lastTerminalCols;
   int? _lastTerminalRows;
@@ -226,11 +228,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _projectListRetryTimer;
   Timer? _terminalListRetryTimer;
   Timer? _hostResponseTimer;
+  Timer? _latencyProbeTimer;
   int _projectListRetryAttempt = 0;
   int _terminalListRetryAttempt = 0;
   String _lastTransportState = 'relay';
   DateTime? _lastConnectedAt;
   DateTime? _connectionGraceUntil;
+  DateTime? _hostInfoProbeSentAt;
+  int? _latencyMs;
   Timer? _connectionGraceTimer;
 
   bool get _isConnected => _socket != null && _relayReady;
@@ -349,6 +354,38 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
+  void _clearLatencyProbe() {
+    _latencyProbeTimer?.cancel();
+    _latencyProbeTimer = null;
+    _hostInfoProbeSentAt = null;
+    _latencyMs = null;
+  }
+
+  void _recordHostInfoLatency() {
+    final sentAt = _hostInfoProbeSentAt;
+    if (sentAt == null) return;
+    final nextLatency = DateTime.now().difference(sentAt).inMilliseconds;
+    _hostInfoProbeSentAt = null;
+    if (nextLatency <= 0 || nextLatency > 60000) return;
+    if (_latencyMs == nextLatency) return;
+    setState(() => _latencyMs = nextLatency);
+  }
+
+  void _sendHostInfoProbe() {
+    if (!_relayReady || _socket == null) return;
+    _hostInfoProbeSentAt = DateTime.now();
+    _send(const RelayEnvelope(type: 'host.info'));
+  }
+
+  void _startLatencyProbe() {
+    if (_latencyProbeTimer != null) return;
+    _sendHostInfoProbe();
+    _latencyProbeTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _sendHostInfoProbe(),
+    );
+  }
+
   void _failHostConnection(
     StoredDevice target,
     WebSocketSinkLike socket,
@@ -363,6 +400,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _lastConnectedAt = null;
     _healthTimer?.cancel();
     _healthTimer = null;
+    _clearLatencyProbe();
     _socketSubscription?.cancel();
     _socketSubscription = null;
     _socket = null;
@@ -412,13 +450,26 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   void _restoreVisibleTerminalFromCache() {
     final id = _sessionId;
-    final controller = _nativeTerminalController;
-    if (id == null || controller == null) return;
-    final cached = _terminalOutputCache[id];
-    if (cached == null || cached.isEmpty) return;
+    if (id == null) return;
+    _restoreTerminalSessionFromCache(id);
+  }
+
+  bool _restoreTerminalSessionFromCache(
+    String sessionId, {
+    bool clearFirst = true,
+  }) {
+    final cached = _terminalOutputCache[sessionId];
+    if (cached == null || cached.isEmpty) return false;
     _pendingTerminalOutput = '';
-    controller.clear();
-    controller.write(cached);
+    final controller = _nativeTerminalController;
+    if (controller == null) {
+      _pendingTerminalOutput = cached;
+    } else if (clearFirst) {
+      _replaceTerminalData(cached, replayingBuffer: true);
+    } else {
+      _writeTerminalData(cached, replayingBuffer: true);
+    }
+    return true;
   }
 
   ProjectInfo? get _selectedProject {
@@ -503,6 +554,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _reconnectTimer?.cancel();
     _healthTimer?.cancel();
     _connectionGraceTimer?.cancel();
+    _latencyProbeTimer?.cancel();
     _toastTimer?.cancel();
     _filePickerTimeoutTimer?.cancel();
     _projectListRetryTimer?.cancel();
@@ -809,6 +861,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _cancelHostResponseProbe();
     _reconnectTimer?.cancel();
     _healthTimer?.cancel();
+    _clearLatencyProbe();
     _socketSubscription?.cancel();
     _socket?.close();
     _sendSeq = DateTime.now().microsecondsSinceEpoch;
@@ -957,7 +1010,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (force) {
       _terminalBufferRetry.reset();
     }
-    _send(const RelayEnvelope(type: 'host.info'));
     final target = _activeDevice;
     _send(
       RelayEnvelope(
@@ -1196,6 +1248,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               if (!_backgroundConnect) _status = _t('app.connected');
             });
             _markTransportConnected('relay');
+            _startLatencyProbe();
             _sendInitialRelayRequests(force: true);
             _startHostResponseProbe(reason: 'hello');
           }
@@ -1207,6 +1260,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           _terminalInputBatcher.reset();
           _clearPendingTerminalInputs();
           unawaited(_p2pTransport.close());
+          _clearLatencyProbe();
           setState(() {
             _relayReady = false;
             _hostResponsive = false;
@@ -1235,6 +1289,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _status = _t('pair.repairRequired');
           });
         case 'host.info':
+          _recordHostInfoLatency();
           _markHostResponsive('host.info');
           final payload = message.payload;
           if (payload is Map && payload['name'] != null) {
@@ -1305,6 +1360,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               _terminalOutputCache.remove(missingSessionId);
               _terminalBufferLengths.remove(missingSessionId);
               _terminalOutputSeqBySession.remove(missingSessionId);
+              _lastTerminalIdByProject.removeWhere(
+                (_, terminalId) => terminalId == missingSessionId,
+              );
             }
           }
           setState(() {
@@ -1342,6 +1400,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               ];
               _sessionId = terminal.id;
               _selectedProjectId = terminal.projectId;
+              _lastTerminalIdByProject[terminal.projectId] = terminal.id;
               _creatingTerminalProjectId = null;
               _terminalBufferRetry.reset();
               _terminalBufferLoading = false;
@@ -1369,6 +1428,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               _terminalOutputCache.remove(closedSessionId);
               _terminalBufferLengths.remove(closedSessionId);
               _terminalOutputSeqBySession.remove(closedSessionId);
+              _lastTerminalIdByProject.removeWhere(
+                (_, terminalId) => terminalId == closedSessionId,
+              );
             }
             if (closedActiveSession) {
               _sessionId = null;
@@ -1527,17 +1589,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       );
       return;
     }
-    if (CoduxLog.isDebugEnabled) {
-      CoduxLog.debug(
-        '[codux-flutter-output] bytes=${raw.codeUnits.length} buffer=$isBuffer session=${message.sessionId ?? ''} data=${_debugTerminalSnippet(raw)}',
-      );
-    }
+    CoduxLog.debug(
+      '[codux-flutter-output] bytes=${raw.codeUnits.length} buffer=$isBuffer session=${message.sessionId ?? ''}',
+    );
     if (isBuffer) {
+      final isFullBuffer = (decoded.offset ?? 0) <= 0;
       _markTerminalBufferReceived(sessionId);
-      if ((decoded.offset ?? 0) <= 0 ||
-          !_terminalOutputCache.containsKey(sessionId)) {
-        _clearTerminal();
+      if (isFullBuffer || !_terminalOutputCache.containsKey(sessionId)) {
         _replaceTerminalOutputCache(sessionId, raw, decoded.bufferLength);
+        _replaceTerminalData(raw, replayingBuffer: true);
       } else {
         _appendTerminalOutputCache(sessionId, raw, decoded.bufferLength);
       }
@@ -1547,8 +1607,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (raw.isNotEmpty) {
       if (!isBuffer) {
         _appendTerminalOutputCache(sessionId, raw, decoded.bufferLength);
+        _writeTerminalData(raw, replayingBuffer: false);
+      } else if ((decoded.offset ?? 0) > 0) {
+        _writeTerminalData(raw, replayingBuffer: true);
       }
-      _writeTerminalData(raw, replayingBuffer: isBuffer);
     }
     if (outputSeq != null) {
       if (outputSeq > previousSeq) {
@@ -1609,7 +1671,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           sessionId: sessionId,
           payload: {
             'offset': full ? 0 : (_terminalBufferLengths[sessionId] ?? 0),
-            if ((_terminalOutputSeqBySession[sessionId] ?? 0) > 0)
+            if (!full && (_terminalOutputSeqBySession[sessionId] ?? 0) > 0)
               'resumeFromSeq': _terminalOutputSeqBySession[sessionId],
           },
         ),
@@ -1649,20 +1711,32 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (displayData.isEmpty) return;
     final controller = _nativeTerminalController;
     if (controller == null) {
-      if (CoduxLog.isDebugEnabled) {
-        CoduxLog.debug(
-          '[codux-flutter-output] pending bytes=${displayData.codeUnits.length} replay=$replayingBuffer data=${_debugTerminalSnippet(displayData)}',
-        );
-      }
+      CoduxLog.debug(
+        '[codux-flutter-output] pending bytes=${displayData.codeUnits.length} replay=$replayingBuffer',
+      );
       _pendingTerminalOutput += displayData;
       return;
     }
-    if (CoduxLog.isDebugEnabled) {
-      CoduxLog.debug(
-        '[codux-flutter-output] write-native bytes=${displayData.codeUnits.length} replay=$replayingBuffer data=${_debugTerminalSnippet(displayData)}',
-      );
-    }
+    CoduxLog.debug(
+      '[codux-flutter-output] write-native bytes=${displayData.codeUnits.length} replay=$replayingBuffer',
+    );
     controller.write(displayData);
+  }
+
+  void _replaceTerminalData(String data, {required bool replayingBuffer}) {
+    final displayData = replayingBuffer
+        ? data
+        : _filterStandalonePromptLines(data);
+    _pendingTerminalOutput = '';
+    final controller = _nativeTerminalController;
+    if (controller == null) {
+      _pendingTerminalOutput = displayData;
+      return;
+    }
+    CoduxLog.debug(
+      '[codux-flutter-output] replace-native bytes=${displayData.codeUnits.length} replay=$replayingBuffer',
+    );
+    controller.replace(displayData);
   }
 
   String _filterStandalonePromptLines(String data) {
@@ -1786,6 +1860,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _queueTerminalTyping(String data) {
+    if (data.isEmpty) return;
     _terminalInputBatcher.add(data);
   }
 
@@ -1817,11 +1892,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
     final inputId =
         '${DateTime.now().microsecondsSinceEpoch}-${++_terminalInputSeq}';
-    if (CoduxLog.isDebugEnabled) {
-      CoduxLog.debug(
-        '[codux-flutter-input] source=$source id=$inputId bytes=${data.codeUnits.length} session=$id data=${_debugTerminalData(data)}',
-      );
-    }
+    CoduxLog.debug(
+      '[codux-flutter-input] source=$source id=$inputId bytes=${data.codeUnits.length} session=$id',
+    );
     _pendingTerminalInputs[inputId] = _PendingTerminalInput(
       inputId: inputId,
       sessionId: id,
@@ -1908,22 +1981,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     return int.tryParse('${value ?? ''}');
   }
 
-  String _debugTerminalData(String data) {
-    return data
-        .replaceAll('\u001b', '<ESC>')
-        .replaceAll('\r', '<CR>')
-        .replaceAll('\n', '<LF>')
-        .replaceAll('\t', '<TAB>');
-  }
-
-  String _debugTerminalSnippet(String data) {
-    const maxLength = 160;
-    final text = data.length > maxLength
-        ? '${data.substring(0, maxLength)}…'
-        : data;
-    return _debugTerminalData(text);
-  }
-
   void _createTerminal([String? projectId]) {
     final target =
         projectId ??
@@ -1996,23 +2053,47 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         .toList();
   }
 
+  TerminalInfo _preferredTerminalForProject(
+    String projectId,
+    Iterable<TerminalInfo> terminals,
+  ) {
+    final list = terminals.toList();
+    final rememberedId = _lastTerminalIdByProject[projectId];
+    if (rememberedId != null) {
+      for (final terminal in list) {
+        if (terminal.id == rememberedId) return terminal;
+      }
+    }
+    for (final terminal in list) {
+      if (_terminalOutputCache[terminal.id]?.isNotEmpty == true) {
+        return terminal;
+      }
+    }
+    return list.first;
+  }
+
   void _selectTerminal(TerminalInfo terminal) {
     if (!_isAccessibleTerminal(terminal)) return;
     _terminalInputBatcher.flush();
     setState(() {
       _sessionId = terminal.id;
       _selectedProjectId = terminal.projectId;
+      _lastTerminalIdByProject[terminal.projectId] = terminal.id;
       _workspaceMode = 'terminal';
       _terminalBufferRetry.reset();
       _terminalBufferLoading = false;
       _creatingTerminalProjectId = null;
       _terminalCursorBottom = 0;
     });
-    _clearTerminal();
+    final restored = _restoreTerminalSessionFromCache(terminal.id);
+    if (!restored) _clearTerminal();
     _ensureP2PStarted();
     _flushPendingTerminalResize(force: true);
-    _requestBufferIfReady(force: true, full: true);
+    _requestBufferIfReady(force: true, full: !restored);
     _focusTerminalViewSoon();
+    if (restored && _terminalBufferLoading && mounted) {
+      setState(() => _terminalBufferLoading = false);
+    }
   }
 
   void _createCurrentProjectTerminal() {
@@ -2034,6 +2115,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _ownedTerminalIds.remove(terminal.id);
       _terminalOutputCache.remove(terminal.id);
       _terminalBufferLengths.remove(terminal.id);
+      _terminalOutputSeqBySession.remove(terminal.id);
+      _lastTerminalIdByProject.removeWhere(
+        (_, terminalId) => terminalId == terminal.id,
+      );
       if (_sessionId == terminal.id) {
         _sessionId = null;
         _terminalBufferRetry.reset();
@@ -2082,6 +2167,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _ownedTerminalIds.remove(closingSessionId);
         _terminalOutputCache.remove(closingSessionId);
         _terminalBufferLengths.remove(closingSessionId);
+        _terminalOutputSeqBySession.remove(closingSessionId);
+        _lastTerminalIdByProject.removeWhere(
+          (_, terminalId) => terminalId == closingSessionId,
+        );
       }
       _sessionId = null;
       _terminalBufferRetry.reset();
@@ -2121,19 +2210,24 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       (item) => item.projectId == projectId && _isAccessibleTerminal(item),
     );
     if (existing.isNotEmpty) {
-      final terminal = existing.first;
+      final terminal = _preferredTerminalForProject(projectId, existing);
       setState(() {
         _sessionId = terminal.id;
+        _lastTerminalIdByProject[projectId] = terminal.id;
         _terminalBufferRetry.reset();
         _terminalBufferLoading = false;
         _creatingTerminalProjectId = null;
         _terminalCursorBottom = 0;
       });
-      _clearTerminal();
+      final restored = _restoreTerminalSessionFromCache(terminal.id);
+      if (!restored) _clearTerminal();
       _ensureP2PStarted();
       _flushPendingTerminalResize(force: true);
-      _requestBufferIfReady(force: true, full: true);
+      _requestBufferIfReady(force: true, full: !restored);
       _terminalInputBatcher.flush();
+      if (restored && _terminalBufferLoading && mounted) {
+        setState(() => _terminalBufferLoading = false);
+      }
       return;
     }
     _createTerminal(projectId);
@@ -2477,6 +2571,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _shouldReconnect = false;
       _socket?.close();
       _socket = null;
+      _clearLatencyProbe();
     }
     await _saveDevices(next);
     if (next.isEmpty) {
@@ -2486,10 +2581,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   void _openDeviceTerminal(StoredDevice device) {
     if (device.deviceId != _activeDevice?.deviceId || !_isConnected) return;
+    final terminal = _currentTerminal();
     setState(() {
       _showTerminal = true;
       _workspaceMode = 'terminal';
       _terminalBufferLoading = false;
+      if (terminal != null) {
+        _lastTerminalIdByProject[terminal.projectId] = terminal.id;
+      }
     });
     _sendInitialRelayRequests(force: true);
     _requestBufferIfReady(force: true, full: true);
@@ -2605,7 +2704,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       return;
     }
     if (resetTerminal) {
-      _clearTerminal();
       _ensureTerminalForSelectedProject();
       return;
     }
@@ -2709,49 +2807,24 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     });
     try {
       final info = await PackageInfo.fromPlatform();
-      final uri = Uri.parse(
-        'https://api.github.com/repos/duxweb/codux-flutter/releases/latest',
-      );
-      final response = await http
-          .get(
-            uri,
-            headers: const {
-              'Accept': 'application/vnd.github+json',
-              'X-GitHub-Api-Version': '2022-11-28',
-            },
-          )
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 404) {
-        _showToast(_t('update.noRelease'));
-        return;
-      }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        _showToast(
-          _t('update.httpFailed', params: {'status': '${response.statusCode}'}),
-        );
-        return;
-      }
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      final tag = '${json['tag_name'] ?? ''}'.trim();
-      final url = '${json['html_url'] ?? ''}'.trim();
-      if (tag.isEmpty) {
-        _showToast(_t('update.noVersion'));
-        return;
-      }
-      final hasUpdate = _compareVersion(tag, info.version) > 0;
-      if (!hasUpdate) {
-        _showToast(_t('update.latest', params: {'version': info.version}));
-        return;
-      }
+      final update = Platform.isIOS
+          ? await _fetchAppStoreUpdate(info)
+          : await _fetchGithubUpdate(info);
+      if (update == null) return;
       if (!mounted) return;
       final accent = Theme.of(context).colorScheme.secondary;
       showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.bgSurface,
-          title: Text(_t('update.foundTitle', params: {'version': tag})),
+          title: Text(
+            _t('update.foundTitle', params: {'version': update.version}),
+          ),
           content: Text(
-            _t('update.foundBody', params: {'version': info.version}),
+            _t(
+              Platform.isIOS ? 'update.foundBodyAppStore' : 'update.foundBody',
+              params: {'version': info.version},
+            ),
           ),
           actions: [
             TextButton(
@@ -2763,9 +2836,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               style: TextButton.styleFrom(foregroundColor: accent),
               onPressed: () {
                 Navigator.pop(ctx);
-                if (url.isNotEmpty) _openUrl(url);
+                if (update.url.isNotEmpty) _openUrl(update.url);
               },
-              child: Text(_t('common.openGithub')),
+              child: Text(
+                Platform.isIOS
+                    ? _t('common.openAppStore')
+                    : _t('common.openGithub'),
+              ),
             ),
           ],
         ),
@@ -2775,6 +2852,76 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     } finally {
       if (mounted) setState(() => _blockingLoadingMessage = null);
     }
+  }
+
+  Future<_AvailableUpdate?> _fetchGithubUpdate(PackageInfo info) async {
+    final uri = Uri.parse(
+      'https://api.github.com/repos/duxweb/codux-flutter/releases/latest',
+    );
+    final response = await http
+        .get(
+          uri,
+          headers: const {
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+        )
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode == 404) {
+      _showToast(_t('update.noRelease'));
+      return null;
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      _showToast(
+        _t('update.httpFailed', params: {'status': '${response.statusCode}'}),
+      );
+      return null;
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final tag = '${json['tag_name'] ?? ''}'.trim();
+    final url = '${json['html_url'] ?? ''}'.trim();
+    if (tag.isEmpty) {
+      _showToast(_t('update.noVersion'));
+      return null;
+    }
+    final hasUpdate = _compareVersion(tag, info.version) > 0;
+    if (!hasUpdate) {
+      _showToast(_t('update.latest', params: {'version': info.version}));
+      return null;
+    }
+    return _AvailableUpdate(version: tag, url: url);
+  }
+
+  Future<_AvailableUpdate?> _fetchAppStoreUpdate(PackageInfo info) async {
+    final uri = Uri.https('itunes.apple.com', '/lookup', {
+      'bundleId': info.packageName,
+    });
+    final response = await http.get(uri).timeout(const Duration(seconds: 10));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      _showToast(
+        _t('update.httpFailed', params: {'status': '${response.statusCode}'}),
+      );
+      return null;
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final results = json['results'] as List<dynamic>? ?? const [];
+    if (results.isEmpty) {
+      _showToast(_t('update.appStorePending'));
+      return null;
+    }
+    final first = results.first as Map<String, dynamic>;
+    final version = '${first['version'] ?? ''}'.trim();
+    final url = '${first['trackViewUrl'] ?? ''}'.trim();
+    if (version.isEmpty) {
+      _showToast(_t('update.noVersion'));
+      return null;
+    }
+    final hasUpdate = _compareVersion(version, info.version) > 0;
+    if (!hasUpdate) {
+      _showToast(_t('update.latest', params: {'version': info.version}));
+      return null;
+    }
+    return _AvailableUpdate(version: version, url: url);
   }
 
   int _compareVersion(String left, String right) {
@@ -2970,6 +3117,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         activeDeviceId: _activeDevice?.deviceId,
         connected: _isDeviceListConnected,
         status: _connectionStatusText,
+        latencyMs: _isDeviceListConnected ? _latencyMs : null,
         topInset: topInset,
         bottomInset: bottomInset,
         onOpen: _openDeviceTerminal,
@@ -3192,7 +3340,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                               onInput: _queueTerminalTyping,
                               onTerminalResponse: (data) {
                                 CoduxLog.debug(
-                                  '[codux-flutter-response] local bytes=${data.codeUnits.length} data=${_debugTerminalSnippet(data)}',
+                                  '[codux-flutter-response] local bytes=${data.codeUnits.length}',
                                 );
                               },
                               onResize: (cols, rows) {
@@ -3353,6 +3501,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       children: [
         TerminalHeader(
           topInset: topInset,
+          latencyMs: _isConnected ? _latencyMs : null,
+          connected: _isConnected,
           activeMode: _workspaceMode,
           onTerminal: _showTerminalMode,
           onStats: _requestAIStats,
@@ -3430,6 +3580,13 @@ class _PendingTerminalInput {
   final String source;
   int attempt = 0;
   Timer? retryTimer;
+}
+
+class _AvailableUpdate {
+  const _AvailableUpdate({required this.version, required this.url});
+
+  final String version;
+  final String url;
 }
 
 class _WebSocketSink implements WebSocketSinkLike {
