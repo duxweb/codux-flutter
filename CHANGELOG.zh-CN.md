@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-05-22
+
+### 修复
+
+- 固定 `device_info_plus` 和 `package_info_plus` 到兼容组合，确保 iOS 归档可在当前 GitHub macOS runner SDK 上构建。
+
 ## [0.1.8] - 2026-05-22
 
 ### 修复

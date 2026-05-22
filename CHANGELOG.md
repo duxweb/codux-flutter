@@ -4,6 +4,12 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-05-22
+
+### Fixed
+
+- Pinned `device_info_plus` and `package_info_plus` to a compatible pair so iOS archives build on the current GitHub macOS runner SDK.
+
 ## [0.1.8] - 2026-05-22
 
 ### Fixed
