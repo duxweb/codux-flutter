@@ -4,6 +4,24 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-05-23
+
+### Added
+
+- Added file upload from the terminal toolbar while keeping image upload on the same path-insertion flow.
+- Added P2P health probing so the app only reports P2P when the DataChannel is open and responding.
+
+### Changed
+
+- Routed uploads through the dedicated WebRTC upload DataChannel only, preventing large uploads from falling back to relay or blocking terminal traffic.
+- Blocked file and image uploads unless a healthy direct P2P upload channel is available.
+- Improved inserted upload paths with platform-aware quoting for paths that contain spaces.
+
+### Fixed
+
+- Stabilized terminal history recovery after switching projects by preferring the direct P2P buffer request path and avoiding relay duplication.
+- Fixed upload status copy for file uploads and added coverage for refused upload transports.
+
 ## [0.1.9] - 2026-05-22
 
 ### Fixed

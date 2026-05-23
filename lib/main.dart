@@ -4,11 +4,11 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:image_picker/image_picker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:codux_native_terminal/codux_native_terminal.dart';
@@ -20,6 +20,7 @@ import 'services/e2e_crypto.dart';
 import 'services/log_service.dart';
 import 'services/local_voice_recognition_service.dart';
 import 'services/relay_service.dart';
+import 'services/p2p_health_monitor.dart';
 import 'services/p2p_terminal_transport.dart';
 import 'services/storage_service.dart';
 import 'services/terminal_buffer_retry.dart';
@@ -43,6 +44,8 @@ import 'widgets/terminal_transition_mask.dart';
 import 'widgets/toolbar.dart';
 
 typedef RelaySocketFactory = dynamic Function(StoredDevice device);
+
+enum _TerminalUploadSource { file, image }
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -126,7 +129,6 @@ class CoduxHomePage extends StatefulWidget {
 class _CoduxHomePageState extends State<CoduxHomePage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   final _storage = StorageService();
-  final _imagePicker = ImagePicker();
   final _settingsNameController = TextEditingController();
   final _fileEditorController = CodeEditingController();
   final _projectNameController = TextEditingController();
@@ -138,6 +140,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   late final TerminalInputBatcher _terminalInputBatcher;
   late final TerminalUploadSender _terminalUploadSender;
   late final P2PTerminalTransport _p2pTransport;
+  late final P2PHealthMonitor _p2pHealth;
   late final LocalVoiceRecognitionService _voiceService;
   Completer<void>? _terminalUploadCompletion;
   CoduxNativeTerminalController? _nativeTerminalController;
@@ -183,7 +186,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   bool _shouldReconnect = true;
   bool _relayReady = false;
   bool _hostResponsive = false;
-  String _p2pState = 'idle';
   bool _appSuspended = false;
   bool _disposing = false;
   bool _hasShownTerminal = false;
@@ -239,6 +241,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _connectionGraceTimer;
 
   bool get _isConnected => _socket != null && _relayReady;
+  bool get _isP2PHealthy => _p2pTransport.isOpen && _p2pHealth.stable;
   bool get _isHostReady =>
       _isConnected &&
       _hostResponsive &&
@@ -273,7 +276,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   String get _terminalTransportStatusText {
-    if (_p2pTransport.isOpen || _p2pState == 'connected') {
+    if (_isP2PHealthy) {
       return _t('transport.p2p');
     }
     return _t('transport.relay');
@@ -366,6 +369,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (sentAt == null) return;
     final nextLatency = DateTime.now().difference(sentAt).inMilliseconds;
     _hostInfoProbeSentAt = null;
+    if (_isP2PHealthy) return;
     if (nextLatency <= 0 || nextLatency > 60000) return;
     if (_latencyMs == nextLatency) return;
     setState(() => _latencyMs = nextLatency);
@@ -411,7 +415,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     setState(() {
       _relayReady = false;
       _hostResponsive = false;
-      _p2pState = 'idle';
       _backgroundConnect = false;
       _status = _t('connection.failedRetry');
       _terminalBufferRetry.reset();
@@ -433,10 +436,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       return;
     }
     _backgroundConnect = false;
-    setState(() {
-      _hostResponsive = false;
-      _p2pState = _p2pTransport.state;
-    });
+    setState(() => _hostResponsive = false);
     _requestProjectList(resetRetry: true);
     _requestTerminalList(resetRetry: true);
     _send(const RelayEnvelope(type: 'host.info'));
@@ -501,7 +501,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       send: (data) => _sendInputNow(data, source: 'typed-batch'),
     );
     _terminalUploadSender = TerminalUploadSender(
-      send: _sendTerminalEnvelopeReliable,
+      send: _sendTerminalUploadEnvelopeReliable,
       afterChunkAck: () => Future<void>.delayed(Duration.zero),
     );
     _p2pTransport = P2PTerminalTransport(
@@ -510,11 +510,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       onState: (state) {
         CoduxLog.info('[codux-flutter-p2p] state=$state');
         if (!mounted || _disposing) return;
-        if (state == 'connected') {
-          _markHostResponsive('p2p.connected', transport: 'p2p');
-        }
         setState(() {
-          _p2pState = state;
           if (state == 'connected') {
             _hostResponsive = true;
           } else if ((state == 'failed' || state == 'disconnected') &&
@@ -523,10 +519,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           }
         });
         if (state == 'connected') {
+          _p2pHealth.start();
           _flushPendingTerminalResize(force: true);
           _requestBufferIfReady();
           _terminalInputBatcher.flush();
-        } else if (state == 'failed') {
+        } else {
+          _p2pHealth.reset(notify: true);
+        }
+        if (state == 'failed') {
           unawaited(_p2pTransport.close());
           if (_relayReady) {
             Timer(const Duration(seconds: 2), () {
@@ -539,6 +539,16 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
     _p2pTransport.setPreferDomesticStun(
       _preferDomesticStunForLocale(_settings.localeId),
+    );
+    _p2pHealth = P2PHealthMonitor(
+      isOpen: () => _p2pTransport.isOpen,
+      sendPing: (id) => _p2pTransport.sendEnvelope(
+        RelayEnvelope(type: 'p2p.ping', payload: {'id': id}),
+      ),
+      onStableChanged: (_) {
+        if (!mounted || _disposing) return;
+        setState(() {});
+      },
     );
     _voiceService = LocalVoiceRecognitionService(
       onLog: (message) => CoduxLog.info('[codux-flutter-voice] $message'),
@@ -555,6 +565,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _healthTimer?.cancel();
     _connectionGraceTimer?.cancel();
     _latencyProbeTimer?.cancel();
+    _p2pHealth.dispose();
     _toastTimer?.cancel();
     _filePickerTimeoutTimer?.cancel();
     _projectListRetryTimer?.cancel();
@@ -878,7 +889,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     setState(() {
       _relayReady = false;
       _hostResponsive = false;
-      _p2pState = 'idle';
       if (!background) {
         _status = _t('app.connecting');
         _projects = [];
@@ -970,7 +980,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       setState(() {
         _relayReady = false;
         _hostResponsive = false;
-        _p2pState = 'idle';
         _status = _t('app.reconnecting');
         _terminalBufferRetry.reset();
         _terminalBufferLoading = false;
@@ -1158,7 +1167,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   bool _sendTerminalEnvelope(RelayEnvelope message) {
     if (_p2pTransport.isOpen) {
       final sent = _p2pTransport.sendEnvelope(message);
-      if (sent) return true;
+      if (sent) {
+        CoduxLog.debug(
+          '[codux-flutter-terminal] p2p send type=${message.type} session=${message.sessionId ?? ''}',
+        );
+        return true;
+      }
     }
     _ensureP2PStarted();
     CoduxLog.debug(
@@ -1167,24 +1181,60 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     return _send(message);
   }
 
-  Future<bool> _sendTerminalEnvelopeReliable(RelayEnvelope message) async {
+  Future<bool> _sendTerminalEnvelopeReliable(
+    RelayEnvelope message, {
+    Duration p2pOpenTimeout = const Duration(milliseconds: 1500),
+  }) async {
     if (_p2pTransport.isOpen) {
       final sent = await _p2pTransport.sendEnvelopeWithBackpressure(message);
-      if (sent) return true;
+      if (sent) {
+        CoduxLog.debug(
+          '[codux-flutter-terminal] p2p send type=${message.type} session=${message.sessionId ?? ''}',
+        );
+        return true;
+      }
       CoduxLog.debug(
         '[codux-flutter-terminal] fallback relay type=${message.type} reason=p2p-send-failed',
       );
     } else {
       _ensureP2PStarted();
-      if (await _p2pTransport.waitUntilOpen()) {
+      if (await _p2pTransport.waitUntilOpen(timeout: p2pOpenTimeout)) {
         final sent = await _p2pTransport.sendEnvelopeWithBackpressure(message);
-        if (sent) return true;
+        if (sent) {
+          CoduxLog.debug(
+            '[codux-flutter-terminal] p2p send type=${message.type} session=${message.sessionId ?? ''}',
+          );
+          return true;
+        }
       }
       CoduxLog.debug(
         '[codux-flutter-terminal] fallback relay type=${message.type} reason=p2p-not-open',
       );
     }
     return _send(message);
+  }
+
+  Future<bool> _sendTerminalUploadEnvelopeReliable(
+    RelayEnvelope message,
+  ) async {
+    if (!_isP2PHealthy || !_p2pTransport.isUploadOpen) {
+      _ensureP2PStarted();
+      CoduxLog.debug(
+        '[codux-flutter-upload] block type=${message.type} reason=upload-channel-not-ready',
+      );
+      return false;
+    }
+    final sent = await _p2pTransport.sendEnvelopeWithBackpressure(message);
+    if (sent) {
+      CoduxLog.debug(
+        '[codux-flutter-upload] p2p send type=${message.type} session=${message.sessionId ?? ''}',
+      );
+      return true;
+    }
+    CoduxLog.debug(
+      '[codux-flutter-upload] block type=${message.type} reason=p2p-send-failed',
+    );
+    return false;
   }
 
   void _ensureP2PStarted() {
@@ -1243,7 +1293,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             CoduxLog.info('[codux-flutter-ws] hello received');
             setState(() {
               _relayReady = true;
-              _p2pState = _p2pTransport.state;
               _hasShownTerminal = true;
               if (!_backgroundConnect) _status = _t('app.connected');
             });
@@ -1264,7 +1313,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           setState(() {
             _relayReady = false;
             _hostResponsive = false;
-            _p2pState = 'idle';
             _showTerminal = false;
             _workspaceMode = 'terminal';
             _projects = [];
@@ -1290,7 +1338,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           });
         case 'host.info':
           _recordHostInfoLatency();
-          _markHostResponsive('host.info');
+          _markHostResponsive('host.info', transport: 'relay');
           final payload = message.payload;
           if (payload is Map && payload['name'] != null) {
             _updateDevice(target.deviceId, hostName: '${payload['name']}');
@@ -1552,6 +1600,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _terminalUploadSender.handleAck(message);
       case 'terminal.input.ack':
         _handleTerminalInputAck(message);
+      case 'p2p.pong':
+        _handleP2PPong(message);
       case 'error':
         final payload = message.payload;
         setState(() {
@@ -1565,6 +1615,19 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       default:
         CoduxLog.debug('[codux-flutter-p2p] ignore type=${message.type}');
     }
+  }
+
+  void _handleP2PPong(RelayEnvelope message) {
+    final payload = message.payload;
+    if (payload is! Map) return;
+    final id = payload['id']?.toString();
+    final rtt = _p2pHealth.handlePong(id);
+    if (rtt == null) return;
+    _markHostResponsive('p2p.pong', transport: 'p2p');
+    if (!mounted) return;
+    setState(() {
+      if (rtt > 0 && rtt < 60000) _latencyMs = rtt;
+    });
   }
 
   void _handleTerminalOutput(RelayEnvelope message) {
@@ -1631,6 +1694,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       final inserted = payload['inserted'] == true;
       final mode = payload['mode']?.toString();
       final tool = payload['tool']?.toString();
+      final kind = payload['kind']?.toString();
       if (!inserted) {
         final path = '${payload['path']}';
         _insertTerminalText('$path ');
@@ -1638,7 +1702,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       setState(() {
         _terminalUploadLoading = false;
         _terminalUploadStatus = '';
-        _status = mode == 'clipboard'
+        _status = kind == 'file'
+            ? _t('upload.fileSentPath')
+            : mode == 'clipboard'
             ? _t(
                 'upload.imageSentTool',
                 params: {'tool': tool ?? _t('upload.aiTool')},
@@ -1665,17 +1731,23 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       terminalReady: _terminalReady,
       sessionId: _sessionId,
       force: force,
-      send: (sessionId) => _sendTerminalEnvelope(
-        RelayEnvelope(
-          type: 'terminal.buffer',
-          sessionId: sessionId,
-          payload: {
-            'offset': full ? 0 : (_terminalBufferLengths[sessionId] ?? 0),
-            if (!full && (_terminalOutputSeqBySession[sessionId] ?? 0) > 0)
-              'resumeFromSeq': _terminalOutputSeqBySession[sessionId],
-          },
-        ),
-      ),
+      send: (sessionId) {
+        unawaited(
+          _sendTerminalEnvelopeReliable(
+            RelayEnvelope(
+              type: 'terminal.buffer',
+              sessionId: sessionId,
+              payload: {
+                'offset': full ? 0 : (_terminalBufferLengths[sessionId] ?? 0),
+                if (!full && (_terminalOutputSeqBySession[sessionId] ?? 0) > 0)
+                  'resumeFromSeq': _terminalOutputSeqBySession[sessionId],
+              },
+            ),
+            p2pOpenTimeout: const Duration(milliseconds: 700),
+          ),
+        );
+        return true;
+      },
     );
     if (sent && !_terminalBufferLoading && mounted) {
       CoduxLog.info(
@@ -2738,41 +2810,117 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     setState(() => _showVoiceOverlay = true);
   }
 
-  Future<void> _uploadImageToTerminal() async {
+  Future<void> _chooseUploadForTerminal() async {
+    if (_terminalUploadLoading) return;
+    if (!_isP2PHealthy || !_p2pTransport.isUploadOpen) {
+      _ensureP2PStarted();
+      _showSnack(_t('upload.p2pRequired'));
+      setState(() => _status = _t('upload.p2pRequired'));
+      return;
+    }
+    final source = await showModalBottomSheet<_TerminalUploadSource>(
+      context: context,
+      backgroundColor: AppColors.bgElevated,
+      barrierColor: AppColors.backdrop,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+      ),
+      builder: (context) {
+        final prefs = AppPreferences.of(context);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: AppSpacing.s),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.attach_file_rounded),
+                  title: Text(prefs.t('upload.chooseFile')),
+                  onTap: () =>
+                      Navigator.of(context).pop(_TerminalUploadSource.file),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.image_outlined),
+                  title: Text(prefs.t('upload.chooseImage')),
+                  onTap: () =>
+                      Navigator.of(context).pop(_TerminalUploadSource.image),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (source == null || !mounted) return;
+    await _uploadPickedFileToTerminal(source);
+  }
+
+  String _uploadKindForSource(_TerminalUploadSource source) =>
+      source == _TerminalUploadSource.image ? 'image' : 'file';
+
+  String _uploadingTextForSource(_TerminalUploadSource source) =>
+      source == _TerminalUploadSource.image
+      ? _t('upload.imageUploading')
+      : _t('upload.fileUploading');
+
+  String _insertingTextForSource(_TerminalUploadSource source) =>
+      source == _TerminalUploadSource.image
+      ? _t('upload.imageInserting')
+      : _t('upload.fileInserting');
+
+  Future<void> _uploadPickedFileToTerminal(_TerminalUploadSource source) async {
     if (_terminalUploadLoading) return;
     final id = _sessionId;
     if (id == null) {
       setState(() => _status = _t('terminal.createOrSelectFirst'));
       return;
     }
-    final image = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 2048,
-      maxHeight: 2048,
-      imageQuality: 88,
+    final result = await FilePicker.pickFiles(
+      type: source == _TerminalUploadSource.image
+          ? FileType.image
+          : FileType.any,
+      allowMultiple: false,
+      withData: true,
     );
-    if (image == null) return;
-    final bytes = await image.readAsBytes();
+    final files = result?.files;
+    final picked = files == null || files.isEmpty ? null : files.single;
+    if (picked == null) return;
+    if (picked.size > 20 * 1024 * 1024) {
+      _showSnack(_t('upload.fileTooLarge'));
+      return;
+    }
+    final bytes =
+        picked.bytes ??
+        (picked.path == null ? null : await File(picked.path!).readAsBytes());
+    if (bytes == null) {
+      _showSnack(_t('upload.fileReadFailed'));
+      return;
+    }
     if (bytes.isEmpty) return;
     _terminalUploadCompletion?.completeError(
       StateError('Terminal upload superseded'),
     );
     final uploadCompletion = Completer<void>();
     _terminalUploadCompletion = uploadCompletion;
+    final uploadingMessage = _uploadingTextForSource(source);
     setState(() {
       _terminalUploadLoading = true;
-      _terminalUploadStatus = _t('upload.imageUploading');
+      _terminalUploadStatus = uploadingMessage;
       _status = _terminalUploadStatus;
     });
     try {
-      await _terminalUploadSender.uploadImage(
+      await _terminalUploadSender.uploadFile(
         sessionId: id,
-        name: image.name,
-        mime: image.mimeType ?? 'image/*',
+        name: picked.name,
+        mime: _mimeForUpload(
+          picked.name,
+          image: source == _TerminalUploadSource.image,
+        ),
         bytes: bytes,
+        kind: _uploadKindForSource(source),
         onProgress: (progress) {
           if (!mounted) return;
-          final message = '${_t('upload.imageUploading')} ${progress.percent}%';
+          final message = '$uploadingMessage ${progress.percent}%';
           setState(() {
             _terminalUploadStatus = message;
             _status = message;
@@ -2780,7 +2928,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         },
       );
       if (!mounted) return;
-      final insertingMessage = _t('upload.imageInserting');
+      final insertingMessage = _insertingTextForSource(source);
       setState(() {
         _terminalUploadStatus = insertingMessage;
         _status = insertingMessage;
@@ -2798,6 +2946,25 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _status = '${_t('remote.error')}: $error';
       });
     }
+  }
+
+  String _mimeForUpload(String name, {required bool image}) {
+    final parts = name.split('.');
+    final extension = parts.length > 1 ? parts.last.toLowerCase() : '';
+    return switch (extension) {
+      'jpg' || 'jpeg' => 'image/jpeg',
+      'png' => 'image/png',
+      'gif' => 'image/gif',
+      'webp' => 'image/webp',
+      'heic' => 'image/heic',
+      'pdf' => 'application/pdf',
+      'json' => 'application/json',
+      'txt' || 'log' || 'md' => 'text/plain',
+      'csv' => 'text/csv',
+      'html' || 'htm' => 'text/html',
+      'zip' => 'application/zip',
+      _ => image ? 'image/*' : 'application/octet-stream',
+    };
   }
 
   Future<void> _checkUpdate() async {
@@ -3486,7 +3653,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                       uploading: _terminalUploadLoading,
                       onPaste: _pasteToTerminal,
                       onCopy: _copyTerminalSelection,
-                      onUpload: _uploadImageToTerminal,
+                      onUpload: _chooseUploadForTerminal,
                       onVoiceInput: _startVoiceInput,
                     ),
                   ),

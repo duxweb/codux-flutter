@@ -36,6 +36,7 @@ void main() {
       'terminal.upload.chunk',
       'terminal.upload.finish',
     ]);
+    expect((sent.first.payload as Map)['kind'], 'image');
     final chunkPayloads = sent
         .where((message) => message.type == 'terminal.upload.chunk')
         .map((message) => message.payload as Map)
@@ -79,6 +80,54 @@ void main() {
       sent.where((message) => message.type == 'terminal.upload.chunk').length,
       2,
     );
+  });
+
+  test('uploads file with file kind', () async {
+    final sent = <RelayEnvelope>[];
+    late final TerminalUploadSender sender;
+    sender = TerminalUploadSender(
+      chunkSize: 8,
+      ackTimeout: const Duration(milliseconds: 100),
+      send: (message) async {
+        sent.add(message);
+        scheduleMicrotask(() => sender.handleAck(_ackFor(message)));
+        return true;
+      },
+    );
+
+    await sender.uploadFile(
+      sessionId: 'session-1',
+      name: 'notes.txt',
+      mime: 'text/plain',
+      bytes: Uint8List.fromList([1, 2, 3]),
+    );
+
+    expect((sent.first.payload as Map)['kind'], 'file');
+  });
+
+  test('stops upload when transport refuses the start message', () async {
+    final sent = <RelayEnvelope>[];
+    final sender = TerminalUploadSender(
+      chunkSize: 8,
+      ackTimeout: const Duration(milliseconds: 10),
+      maxRetries: 0,
+      send: (message) async {
+        sent.add(message);
+        return false;
+      },
+    );
+
+    await expectLater(
+      sender.uploadFile(
+        sessionId: 'session-1',
+        name: 'notes.txt',
+        mime: 'text/plain',
+        bytes: Uint8List.fromList([1, 2, 3]),
+      ),
+      throwsStateError,
+    );
+
+    expect(sent.map((message) => message.type), ['terminal.upload.start']);
   });
 }
 

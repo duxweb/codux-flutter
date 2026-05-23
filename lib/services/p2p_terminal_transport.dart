@@ -48,6 +48,7 @@ class P2PTerminalTransport {
 
   String get state => _state;
   bool get isOpen => _isChannelOpen(_channel);
+  bool get isUploadOpen => _isChannelOpen(_uploadChannel);
 
   void setPreferDomesticStun(bool value) {
     _preferDomesticStun = value;
@@ -84,9 +85,11 @@ class P2PTerminalTransport {
       peer.onConnectionState = (state) {
         switch (state) {
           case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-            _disconnectTimer?.cancel();
-            _disconnectTimer = null;
-            _setState('connected');
+            if (isOpen) {
+              _disconnectTimer?.cancel();
+              _disconnectTimer = null;
+              _setState('connected');
+            }
           case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
             _disconnectTimer?.cancel();
             _disconnectTimer = null;
@@ -170,15 +173,15 @@ class P2PTerminalTransport {
   bool sendEnvelope(RelayEnvelope message) {
     final channel = _channelForMessage(message);
     if (!_isChannelOpen(channel)) {
-      if (_isUploadMessage(message) && _isChannelOpen(_channel)) {
-        return _sendOnChannel(_channel!, message);
-      }
       return false;
     }
     return _sendOnChannel(channel!, message);
   }
 
   bool _sendOnChannel(RTCDataChannel channel, RelayEnvelope message) {
+    CoduxLog.debug(
+      '[codux-flutter-p2p] send type=${message.type} session=${message.sessionId ?? ''}',
+    );
     unawaited(
       channel
           .send(RTCDataChannelMessage(jsonEncode(message.toJson())))
@@ -223,9 +226,7 @@ class P2PTerminalTransport {
     bool upload = false,
     Duration timeout = const Duration(seconds: 5),
   }) async {
-    final channel = upload && _isChannelOpen(_uploadChannel)
-        ? _uploadChannel
-        : _channel;
+    final channel = upload ? _uploadChannel : _channel;
     if (!_isChannelOpen(channel)) {
       return false;
     }
@@ -265,9 +266,7 @@ class P2PTerminalTransport {
 
     Timer? pollTimer;
     pollTimer = Timer.periodic(const Duration(milliseconds: 100), (_) async {
-      final current = upload && channel == _uploadChannel
-          ? _uploadChannel
-          : _channel;
+      final current = upload ? _uploadChannel : _channel;
       if (current != channel ||
           current?.state != RTCDataChannelState.RTCDataChannelOpen) {
         if (!completer.isCompleted) completer.complete(false);
@@ -355,7 +354,7 @@ class P2PTerminalTransport {
   }
 
   RTCDataChannel? _channelForMessage(RelayEnvelope message) {
-    if (_isUploadMessage(message) && _isChannelOpen(_uploadChannel)) {
+    if (_isUploadMessage(message)) {
       return _uploadChannel;
     }
     return _channel;

@@ -26,11 +26,12 @@ class TerminalUploadSender {
   final TerminalUploadYield? _afterChunkAck;
   final Map<String, Completer<TerminalUploadAck>> _pendingAcks = {};
 
-  Future<void> uploadImage({
+  Future<void> uploadFile({
     required String sessionId,
     required String name,
     required String mime,
     required Uint8List bytes,
+    String kind = 'file',
     TerminalUploadProgressCallback? onProgress,
   }) async {
     if (bytes.isEmpty) return;
@@ -44,6 +45,7 @@ class TerminalUploadSender {
           'uploadId': uploadId,
           'name': name,
           'mime': mime,
+          'kind': _normalizeKind(kind),
           'totalBytes': bytes.length,
           'totalChunks': totalChunks,
           'chunkSize': chunkSize,
@@ -99,6 +101,23 @@ class TerminalUploadSender {
       ),
       uploadId: uploadId,
       stage: 'finish',
+    );
+  }
+
+  Future<void> uploadImage({
+    required String sessionId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    TerminalUploadProgressCallback? onProgress,
+  }) {
+    return uploadFile(
+      sessionId: sessionId,
+      name: name,
+      mime: mime,
+      bytes: bytes,
+      kind: 'image',
+      onProgress: onProgress,
     );
   }
 
@@ -175,6 +194,9 @@ class TerminalUploadSender {
     if (value is num) return value.toInt();
     return int.tryParse('${value ?? ''}');
   }
+
+  String _normalizeKind(String value) =>
+      value.trim().toLowerCase() == 'image' ? 'image' : 'file';
 }
 
 class TerminalUploadProgress {
