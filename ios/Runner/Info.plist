@@ -32,6 +32,8 @@
 	<string>Codux uses the microphone for local voice input.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Codux uses the photo library to upload selected images to the terminal.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Codux uses location permission only when required by iOS to support local network and nearby connectivity features. Codux does not collect or store your location data.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

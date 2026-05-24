@@ -4,6 +4,16 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-05-24
+
+### Changed
+
+- Tuned the Android adaptive icon foreground scale to better match the iOS and macOS app icon proportions.
+
+### Fixed
+
+- Added the iOS location permission purpose string required by App Store Connect static analysis for nearby connectivity APIs.
+
 ## [0.1.10] - 2026-05-23
 
 ### Added
