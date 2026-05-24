@@ -35,6 +35,12 @@ class ProjectTabBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.secondary;
     final prefs = AppPreferences.of(context);
+    final splitTerminals = terminals
+        .where((terminal) => _isSplitTerminal(terminal))
+        .toList();
+    final tabTerminals = terminals
+        .where((terminal) => !_isSplitTerminal(terminal))
+        .toList();
     return Material(
       color: AppColors.bgSurface,
       child: Container(
@@ -143,29 +149,33 @@ class ProjectTabBar extends StatelessWidget {
                     }
                   },
                   itemBuilder: (context) => [
-                    if (terminals.isNotEmpty)
-                      PopupMenuItem<String>(
+                    ..._terminalMenuSection(
+                      title: prefs.t('app.splits'),
+                      terminals: splitTerminals,
+                      activeTerminalId: activeTerminalId,
+                      terminalLabel: prefs.t('app.terminal'),
+                    ),
+                    if (splitTerminals.isNotEmpty && tabTerminals.isNotEmpty)
+                      const PopupMenuItem<String>(
                         enabled: false,
-                        height: 30,
-                        child: Text(
-                          prefs.t('app.splits'),
-                          style: const TextStyle(
-                            color: AppColors.textMuted,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w400,
+                        height: 10,
+                        padding: EdgeInsets.zero,
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: AppSpacing.m,
+                          ),
+                          child: SizedBox(
+                            height: 1,
+                            child: ColoredBox(color: AppColors.textSubtle),
                           ),
                         ),
                       ),
-                    for (var i = 0; i < terminals.length; i += 1)
-                      PopupMenuItem(
-                        value: 'terminal:${terminals[i].id}',
-                        height: 42,
-                        child: _TerminalMenuItem(
-                          index: i + 1,
-                          active: terminals[i].id == activeTerminalId,
-                          terminalLabel: prefs.t('app.terminal'),
-                        ),
-                      ),
+                    ..._terminalMenuSection(
+                      title: prefs.t('app.tabs'),
+                      terminals: tabTerminals,
+                      activeTerminalId: activeTerminalId,
+                      terminalLabel: prefs.t('app.terminal'),
+                    ),
                     if (terminals.isNotEmpty)
                       const PopupMenuItem<String>(
                         enabled: false,
@@ -236,6 +246,45 @@ class ProjectTabBar extends StatelessWidget {
       ),
     );
   }
+}
+
+bool _isSplitTerminal(TerminalInfo terminal) {
+  return terminal.resizeOwner == 'mac' ||
+      terminal.kind == 'desktop-shared' ||
+      terminal.ownerKind == 'mac';
+}
+
+List<PopupMenuEntry<String>> _terminalMenuSection({
+  required String title,
+  required List<TerminalInfo> terminals,
+  required String? activeTerminalId,
+  required String terminalLabel,
+}) {
+  if (terminals.isEmpty) return const [];
+  return [
+    PopupMenuItem<String>(
+      enabled: false,
+      height: 30,
+      child: Text(
+        title,
+        style: const TextStyle(
+          color: AppColors.textMuted,
+          fontSize: 12,
+          fontWeight: FontWeight.w400,
+        ),
+      ),
+    ),
+    for (var i = 0; i < terminals.length; i += 1)
+      PopupMenuItem(
+        value: 'terminal:${terminals[i].id}',
+        height: 42,
+        child: _TerminalMenuItem(
+          index: i + 1,
+          active: terminals[i].id == activeTerminalId,
+          terminalLabel: terminalLabel,
+        ),
+      ),
+  ];
 }
 
 class _ProjectMenuItem extends StatelessWidget {
