@@ -211,6 +211,8 @@ class _InfoRow extends StatelessWidget {
   final String value;
   final String hint;
 
+  static const double _labelWidth = 72;
+
   @override
   Widget build(BuildContext context) => Container(
     width: double.infinity,
@@ -225,12 +227,16 @@ class _InfoRow extends StatelessWidget {
     child: Row(
       children: [
         SizedBox(
-          width: 36,
+          width: _labelWidth,
           child: Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
             style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
           ),
         ),
+        const SizedBox(width: AppSpacing.s),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -268,6 +274,8 @@ class _CodeBlock extends StatelessWidget {
   final String code;
   final Color accent;
 
+  static const double _labelWidth = 72;
+
   @override
   Widget build(BuildContext context) {
     final prefs = AppPreferences.of(context);
@@ -284,12 +292,16 @@ class _CodeBlock extends StatelessWidget {
       child: Row(
         children: [
           SizedBox(
-            width: 36,
+            width: _labelWidth,
             child: Text(
               prefs.t('pair.matchCode'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
             ),
           ),
+          const SizedBox(width: AppSpacing.s),
           Expanded(
             child: Text(
               code,
