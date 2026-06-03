@@ -144,7 +144,7 @@ private final class CoduxGhosttyTerminalHostView: UIView {
         isOpaque = true
 
         terminalView.translatesAutoresizingMaskIntoConstraints = false
-        disableTerminalInputAccessory(terminalView)
+        configureTerminalResponder(terminalView)
         terminalView.backgroundColor = .clear
         terminalView.isOpaque = false
         terminalView.controller = terminalController
@@ -187,10 +187,13 @@ private final class CoduxGhosttyTerminalHostView: UIView {
     }
 
     func focusKeyboard() {
+        allowNextTerminalKeyboardFocus(terminalView)
+        defer { disallowTerminalKeyboardFocus(terminalView) }
         terminalView.becomeFirstResponder()
     }
 
     func hideKeyboard() {
+        disallowTerminalKeyboardFocus(terminalView)
         terminalView.resignFirstResponder()
     }
 
@@ -474,9 +477,12 @@ private final class CoduxEventSinkBox {
     var sink: FlutterEventSink?
 }
 
-private func disableTerminalInputAccessory(_ view: UIView) {
-    let selector = #selector(getter: UIResponder.inputAccessoryView)
-    let className = "\(NSStringFromClass(type(of: view)))_CoduxNoAccessory"
+private var coduxKeyboardFocusAllowedKey: UInt8 = 0
+
+private func configureTerminalResponder(_ view: UIView) {
+    let inputAccessorySelector = #selector(getter: UIResponder.inputAccessoryView)
+    let canBecomeSelector = #selector(getter: UIResponder.canBecomeFirstResponder)
+    let className = "\(NSStringFromClass(type(of: view)))_CoduxResponder"
     let subclass: AnyClass
     if let existing = NSClassFromString(className) {
         subclass = existing
@@ -484,15 +490,34 @@ private func disableTerminalInputAccessory(_ view: UIView) {
         guard let created = objc_allocateClassPair(type(of: view), className, 0) else {
             return
         }
-        let block: @convention(block) (AnyObject) -> UIView? = { _ in nil }
+        let inputAccessoryBlock: @convention(block) (AnyObject) -> UIView? = { _ in nil }
         class_addMethod(
             created,
-            selector,
-            imp_implementationWithBlock(block),
+            inputAccessorySelector,
+            imp_implementationWithBlock(inputAccessoryBlock),
             "@@:"
+        )
+        let canBecomeBlock: @convention(block) (AnyObject) -> Bool = { object in
+            let allowed = objc_getAssociatedObject(object, &coduxKeyboardFocusAllowedKey) as? Bool
+            return allowed == true
+        }
+        class_addMethod(
+            created,
+            canBecomeSelector,
+            imp_implementationWithBlock(canBecomeBlock),
+            "B@:"
         )
         objc_registerClassPair(created)
         subclass = created
     }
     object_setClass(view, subclass)
+    disallowTerminalKeyboardFocus(view)
+}
+
+private func allowNextTerminalKeyboardFocus(_ view: UIView) {
+    objc_setAssociatedObject(view, &coduxKeyboardFocusAllowedKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+}
+
+private func disallowTerminalKeyboardFocus(_ view: UIView) {
+    objc_setAssociatedObject(view, &coduxKeyboardFocusAllowedKey, false, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 }
