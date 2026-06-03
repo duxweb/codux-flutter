@@ -212,7 +212,11 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_path/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app_path/Frameworks/libghostty.framework/Info.plist"
+          find "$app_path/Frameworks" -maxdepth 1 -type d -name '*.framework' -print | sort
+          ghostty_plist="$app_path/Frameworks/libghostty.framework/Info.plist"
+          if [ -f "$ghostty_plist" ]; then
+            /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$ghostty_plist"
+          fi
           codesign --verify --deep --strict --verbose=2 "$app_path"
 
       - name: Upload IPA artifact
