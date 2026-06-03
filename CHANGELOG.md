@@ -4,6 +4,19 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.5.0-beta.1] - 2026-06-03
+
+### Changed
+
+- Aligned the mobile client with the Codux 1.5.0 desktop protocol and GPUI terminal host.
+- Improved shared terminal restore, resize, split ordering, and mobile terminal rendering across Android and iOS.
+- Added a remote protocol version check during `host.info` so incompatible desktop builds ask users to update instead of connecting silently.
+
+### Fixed
+
+- Removed the Ghostty iOS keyboard accessory from the embedded terminal.
+- Fixed Android terminal background, sizing, and stale split list behavior for the new desktop runtime.
+
 ## [0.1.11] - 2026-05-24
 
 ### Changed

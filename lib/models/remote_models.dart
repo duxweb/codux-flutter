@@ -197,6 +197,10 @@ class TerminalInfo {
     this.ownerKind,
     this.ownerDeviceId,
     this.resizeOwner,
+    this.slotId,
+    this.sessionKey,
+    this.paneIndex,
+    this.sortOrder,
     this.cols,
     this.rows,
     this.status,
@@ -208,6 +212,10 @@ class TerminalInfo {
   final String? ownerKind;
   final String? ownerDeviceId;
   final String? resizeOwner;
+  final String? slotId;
+  final String? sessionKey;
+  final int? paneIndex;
+  final int? sortOrder;
   final int? cols;
   final int? rows;
   final String? status;
@@ -220,6 +228,14 @@ class TerminalInfo {
     ownerKind: json['ownerKind']?.toString(),
     ownerDeviceId: json['ownerDeviceId']?.toString(),
     resizeOwner: json['resizeOwner']?.toString(),
+    slotId: json['slotId']?.toString(),
+    sessionKey: json['sessionKey']?.toString(),
+    paneIndex: json['paneIndex'] is num
+        ? (json['paneIndex'] as num).toInt()
+        : int.tryParse('${json['paneIndex'] ?? ''}'),
+    sortOrder: json['sortOrder'] is num
+        ? (json['sortOrder'] as num).toInt()
+        : int.tryParse('${json['sortOrder'] ?? ''}'),
     cols: json['cols'] is num
         ? (json['cols'] as num).toInt()
         : int.tryParse('${json['cols'] ?? ''}'),

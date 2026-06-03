@@ -72,6 +72,11 @@ jobs:
             echo "iOS version is missing" >&2
             exit 1
           fi
+          build_name="${version%%-*}"
+          if [[ -z "${build_name}" ]]; then
+            echo "iOS build name is missing" >&2
+            exit 1
+          fi
 
           build_number="${{ github.event.inputs.build_number }}"
           if [[ -z "${build_number}" ]]; then
@@ -86,6 +91,7 @@ jobs:
           fi
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "build_name=${build_name}" >> "$GITHUB_OUTPUT"
           echo "build_number=${build_number}" >> "$GITHUB_OUTPUT"
           echo "upload_to_testflight=${upload_to_testflight}" >> "$GITHUB_OUTPUT"
 
@@ -188,7 +194,7 @@ jobs:
         shell: bash
         run: |
           flutter build ipa --release \
-            --build-name "${{ steps.meta.outputs.version }}" \
+            --build-name "${{ steps.meta.outputs.build_name }}" \
             --build-number "${{ steps.meta.outputs.build_number }}" \
             --dart-define "CODUX_LOG_LEVEL=${{ github.event.inputs.log_level || 'warn' }}" \
             --export-options-plist="$RUNNER_TEMP/ExportOptions.plist"

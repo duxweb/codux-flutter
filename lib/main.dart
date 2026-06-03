@@ -45,6 +45,8 @@ import 'widgets/toolbar.dart';
 
 typedef RelaySocketFactory = dynamic Function(StoredDevice device);
 
+const String _remoteProtocolVersion = 'v1.0';
+
 enum _TerminalUploadSource { file, image }
 
 void main() {
@@ -149,6 +151,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   final Map<String, int> _terminalBufferLengths = {};
   final Map<String, int> _terminalOutputSeqBySession = {};
   final Map<String, String> _lastTerminalIdByProject = {};
+  final Set<String> _protocolBlockedHostIds = {};
   double _terminalCursorBottom = 0;
   int? _lastTerminalCols;
   int? _lastTerminalRows;
@@ -185,6 +188,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   bool _backgroundConnect = false;
   bool _shouldReconnect = true;
   bool _relayReady = false;
+  bool _remoteProtocolReady = false;
   bool _hostResponsive = false;
   bool _appSuspended = false;
   bool _disposing = false;
@@ -345,6 +349,68 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     });
   }
 
+  bool _isCompatibleRemoteProtocol(Object? payload) {
+    if (payload is! Map) return false;
+    return payload['protocolVersion'] == _remoteProtocolVersion;
+  }
+
+  void _markRemoteProtocolReady({bool force = false}) {
+    if (_remoteProtocolReady && !force) return;
+    _remoteProtocolReady = true;
+    _sendInitialRelayRequests(force: force);
+  }
+
+  void _failRemoteProtocol(
+    StoredDevice target,
+    WebSocketSinkLike socket,
+    Object? payload,
+  ) {
+    if (_socket != socket) return;
+    final version = payload is Map ? '${payload['protocolVersion'] ?? ''}' : '';
+    CoduxLog.warn(
+      '[codux-flutter-ws] incompatible protocol expected=$_remoteProtocolVersion received=$version host=${target.hostId} device=${target.deviceId}',
+    );
+    _shouldReconnect = false;
+    final shouldPrompt = _protocolBlockedHostIds.add(target.hostId);
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _cancelHostResponseProbe();
+    _clearConnectionGrace();
+    _clearLatencyProbe();
+    _socketSubscription?.cancel();
+    _socketSubscription = null;
+    _socket = null;
+    socket.close();
+    unawaited(_p2pTransport.close());
+    _terminalInputBatcher.reset();
+    _clearPendingTerminalInputs();
+    final message = _t('connection.upgradeRequired');
+    setState(() {
+      _relayReady = false;
+      _remoteProtocolReady = false;
+      _hostResponsive = false;
+      _backgroundConnect = false;
+      _showTerminal = false;
+      _workspaceMode = 'terminal';
+      _projects = [];
+      _projectListLoaded = false;
+      _terminals = [];
+      _terminalListLoaded = false;
+      _projectListRetryTimer?.cancel();
+      _terminalListRetryTimer?.cancel();
+      _projectListRetryAttempt = 0;
+      _terminalListRetryAttempt = 0;
+      _selectedProjectId = null;
+      _sessionId = null;
+      _status = message;
+      _terminalBufferRetry.reset();
+      _terminalBufferLoading = false;
+    });
+    if (shouldPrompt) {
+      _showToast(message);
+    }
+  }
+
   void _markHostResponsive(String source, {String? transport}) {
     final wasResponsive = _hostResponsive;
     _hostResponsive = true;
@@ -383,7 +449,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   void _startLatencyProbe() {
     if (_latencyProbeTimer != null) return;
-    _sendHostInfoProbe();
     _latencyProbeTimer = Timer.periodic(
       const Duration(seconds: 10),
       (_) => _sendHostInfoProbe(),
@@ -414,6 +479,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _clearPendingTerminalInputs();
     setState(() {
       _relayReady = false;
+      _remoteProtocolReady = false;
       _hostResponsive = false;
       _backgroundConnect = false;
       _status = _t('connection.failedRetry');
@@ -863,6 +929,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       setState(() => _showScanner = true);
       return;
     }
+    if (_protocolBlockedHostIds.contains(target.hostId)) {
+      if (!background) {
+        setState(() => _status = _t('connection.upgradeRequired'));
+      }
+      return;
+    }
     _shouldReconnect = true;
     _backgroundConnect = background;
     final generation = ++_socketGeneration;
@@ -888,6 +960,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (!background) _terminalInputBatcher.reset();
     setState(() {
       _relayReady = false;
+      _remoteProtocolReady = false;
       _hostResponsive = false;
       if (!background) {
         _status = _t('app.connecting');
@@ -979,6 +1052,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       unawaited(_p2pTransport.close());
       setState(() {
         _relayReady = false;
+        _remoteProtocolReady = false;
         _hostResponsive = false;
         _status = _t('app.reconnecting');
         _terminalBufferRetry.reset();
@@ -1035,6 +1109,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _requestProjectList({bool resetRetry = false}) {
+    if (!_remoteProtocolReady) return;
     if (resetRetry) {
       _projectListRetryTimer?.cancel();
       _projectListRetryTimer = null;
@@ -1075,6 +1150,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _requestTerminalList({bool resetRetry = false}) {
+    if (!_remoteProtocolReady) return;
     if (resetRetry) {
       _terminalListRetryTimer?.cancel();
       _terminalListRetryTimer = null;
@@ -1297,8 +1373,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               if (!_backgroundConnect) _status = _t('app.connected');
             });
             _markTransportConnected('relay');
-            _startLatencyProbe();
-            _sendInitialRelayRequests(force: true);
+            _sendHostInfoProbe();
             _startHostResponseProbe(reason: 'hello');
           }
         case 'host.offline':
@@ -1312,6 +1387,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           _clearLatencyProbe();
           setState(() {
             _relayReady = false;
+            _remoteProtocolReady = false;
             _hostResponsive = false;
             _showTerminal = false;
             _workspaceMode = 'terminal';
@@ -1338,11 +1414,22 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           });
         case 'host.info':
           _recordHostInfoLatency();
+          if (!_isCompatibleRemoteProtocol(message.payload)) {
+            final socket = _socket;
+            if (socket != null) {
+              _failRemoteProtocol(target, socket, message.payload);
+            }
+            return;
+          }
           _markHostResponsive('host.info', transport: 'relay');
           final payload = message.payload;
           if (payload is Map && payload['name'] != null) {
             _updateDevice(target.deviceId, hostName: '${payload['name']}');
           }
+          _markRemoteProtocolReady(
+            force: !_projectListLoaded || !_terminalListLoaded,
+          );
+          _startLatencyProbe();
         case 'p2p.answer':
           final payload = message.payload;
           if (payload is Map) {
@@ -1657,6 +1744,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
     if (isBuffer) {
       final isFullBuffer = (decoded.offset ?? 0) <= 0;
+      final localCacheEmpty = (_terminalOutputCache[sessionId] ?? '').isEmpty;
+      if (!isFullBuffer && localCacheEmpty) {
+        _terminalBufferLengths[sessionId] = 0;
+        _terminalBufferRetry.resetLastBuffered();
+        _requestBufferIfReady(force: true, full: true);
+        if (raw.isEmpty) return;
+      }
       _markTerminalBufferReceived(sessionId);
       if (isFullBuffer || !_terminalOutputCache.containsKey(sessionId)) {
         _replaceTerminalOutputCache(sessionId, raw, decoded.bufferLength);
@@ -1739,6 +1833,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               sessionId: sessionId,
               payload: {
                 'offset': full ? 0 : (_terminalBufferLengths[sessionId] ?? 0),
+                if (_pendingTerminalCols != null) 'cols': _pendingTerminalCols,
+                if (_pendingTerminalRows != null) 'rows': _pendingTerminalRows,
                 if (!full && (_terminalOutputSeqBySession[sessionId] ?? 0) > 0)
                   'resumeFromSeq': _terminalOutputSeqBySession[sessionId],
               },
@@ -1809,6 +1905,27 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       '[codux-flutter-output] replace-native bytes=${displayData.codeUnits.length} replay=$replayingBuffer',
     );
     controller.replace(displayData);
+  }
+
+  bool _restoreNativeTerminalController(
+    CoduxNativeTerminalController controller,
+  ) {
+    final sessionId = _sessionId;
+    if (sessionId != null) {
+      final cached = _terminalOutputCache[sessionId];
+      if (cached != null && cached.isNotEmpty) {
+        _pendingTerminalOutput = '';
+        unawaited(controller.replace(cached));
+        return true;
+      }
+    }
+    final pending = _pendingTerminalOutput;
+    _pendingTerminalOutput = '';
+    if (pending.isNotEmpty) {
+      unawaited(controller.write(pending));
+      return true;
+    }
+    return false;
   }
 
   String _filterStandalonePromptLines(String data) {
@@ -1888,22 +2005,23 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _sendTerminalResize(int cols, int rows) {
     final id = _sessionId;
     if (cols <= 0 || rows <= 0) return;
-    _pendingTerminalCols = cols;
+    final nextCols = cols;
+    _pendingTerminalCols = nextCols;
     _pendingTerminalRows = rows;
     if (id == null) return;
     final terminal = _currentTerminal();
     if (!_canResizeTerminal(terminal)) return;
     final nextRows = _keyboardVisible ? (_lastTerminalRows ?? rows) : rows;
-    if (_lastTerminalCols == cols && _lastTerminalRows == nextRows) {
+    if (_lastTerminalCols == nextCols && _lastTerminalRows == nextRows) {
       return;
     }
-    _lastTerminalCols = cols;
+    _lastTerminalCols = nextCols;
     _lastTerminalRows = nextRows;
     _sendTerminalEnvelope(
       RelayEnvelope(
         type: 'terminal.resize',
         sessionId: id,
-        payload: {'cols': cols, 'rows': nextRows},
+        payload: {'cols': nextCols, 'rows': nextRows},
       ),
     );
   }
@@ -2118,11 +2236,27 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   List<TerminalInfo> _currentProjectTerminals() {
     final projectId = _selectedProjectId;
     if (projectId == null) return const [];
-    return _terminals
+    final terminals = _terminals
         .where(
           (item) => item.projectId == projectId && _isAccessibleTerminal(item),
         )
         .toList();
+    terminals.sort(_compareTerminals);
+    return terminals;
+  }
+
+  int _compareTerminals(TerminalInfo left, TerminalInfo right) {
+    final order = _compareNullableInt(left.sortOrder, right.sortOrder);
+    if (order != 0) return order;
+    final pane = _compareNullableInt(left.paneIndex, right.paneIndex);
+    if (pane != 0) return pane;
+    return left.id.compareTo(right.id);
+  }
+
+  int _compareNullableInt(int? left, int? right) {
+    final leftValue = left ?? 0x7fffffff;
+    final rightValue = right ?? 0x7fffffff;
+    return leftValue.compareTo(rightValue);
   }
 
   TerminalInfo _preferredTerminalForProject(
@@ -3416,7 +3550,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       double.infinity,
     );
     final toolbarSafeInset = toolbarBottom.clamp(0.0, bottomInset);
-    const terminalPadding = EdgeInsets.fromLTRB(8, 6, 8, 6);
+    const terminalBackground = AppColors.bgBase;
+    final terminalPadding = Platform.isIOS
+        ? const EdgeInsets.fromLTRB(0, 0, 0, 0)
+        : const EdgeInsets.fromLTRB(8, 6, 8, 6);
 
     Widget terminalBody = MediaQuery.removeViewInsets(
       context: context,
@@ -3476,166 +3613,165 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                   height: terminalHeight,
                   child: Transform.translate(
                     offset: Offset(0, -terminalShift),
-                    child: Padding(
-                      padding: terminalPadding,
-                      child: Stack(
-                        children: [
-                          if (_hasShownTerminal)
-                            CoduxNativeTerminalView(
-                              scrollEnabled: !_keyboardVisible,
-                              onControllerCreated: (controller) {
-                                _nativeTerminalController = controller;
-                                controller.setLogLevel(
-                                  CoduxLog.nativeLevelName,
-                                );
-                                final pending = _pendingTerminalOutput;
-                                _pendingTerminalOutput = '';
-                                if (pending.isNotEmpty) {
-                                  controller.write(pending);
-                                }
-                                controller.requestResize();
-                                WidgetsBinding.instance.addPostFrameCallback((
-                                  _,
-                                ) {
-                                  if (!mounted) return;
-                                  _requestBufferIfReady(
-                                    force: true,
-                                    full: true,
+                    child: ColoredBox(
+                      color: terminalBackground,
+                      child: Padding(
+                        padding: terminalPadding,
+                        child: Stack(
+                          children: [
+                            if (_hasShownTerminal)
+                              CoduxNativeTerminalView(
+                                scrollEnabled: !_keyboardVisible,
+                                onControllerCreated: (controller) {
+                                  _nativeTerminalController = controller;
+                                  controller.setLogLevel(
+                                    CoduxLog.nativeLevelName,
                                   );
-                                });
-                              },
-                              onInput: _queueTerminalTyping,
-                              onTerminalResponse: (data) {
-                                CoduxLog.debug(
-                                  '[codux-flutter-response] local bytes=${data.codeUnits.length}',
-                                );
-                              },
-                              onResize: (cols, rows) {
-                                final firstResize = !_terminalReady;
-                                _terminalReady = true;
-                                _sendTerminalResize(cols, rows);
-                                if (firstResize) {
-                                  WidgetsBinding.instance.addPostFrameCallback((
-                                    _,
-                                  ) {
-                                    if (!mounted) return;
-                                    _requestBufferIfReady(
-                                      force: true,
-                                      full: true,
+                                  final restored =
+                                      _restoreNativeTerminalController(
+                                        controller,
+                                      );
+                                  if (restored && _terminalBufferLoading) {
+                                    setState(
+                                      () => _terminalBufferLoading = false,
                                     );
+                                  }
+                                  _terminalReady = false;
+                                  _terminalBufferRetry.resetLastBuffered();
+                                  controller.requestResize();
+                                },
+                                onInput: _queueTerminalTyping,
+                                onTerminalResponse: (data) {
+                                  CoduxLog.debug(
+                                    '[codux-flutter-response] local bytes=${data.codeUnits.length}',
+                                  );
+                                },
+                                onResize: (cols, rows) {
+                                  final firstResize = !_terminalReady;
+                                  _terminalReady = true;
+                                  _sendTerminalResize(cols, rows);
+                                  if (firstResize) {
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          if (!mounted) return;
+                                          _requestBufferIfReady(
+                                            force: true,
+                                            full: true,
+                                          );
+                                        });
+                                  }
+                                },
+                                onMetrics: (metrics) {
+                                  final cursorBottom =
+                                      metrics.cursorBottomPx /
+                                      MediaQuery.devicePixelRatioOf(context);
+                                  if (_terminalCursorBottom == cursorBottom) {
+                                    return;
+                                  }
+                                  setState(() {
+                                    _terminalCursorBottom = cursorBottom;
                                   });
-                                }
-                              },
-                              onMetrics: (metrics) {
-                                final cursorBottom =
-                                    metrics.cursorBottomPx /
-                                    MediaQuery.devicePixelRatioOf(context);
-                                if (_terminalCursorBottom == cursorBottom) {
-                                  return;
-                                }
-                                setState(() {
-                                  _terminalCursorBottom = cursorBottom;
-                                });
-                              },
-                            )
-                          else
-                            ConnectHint(
-                              status: _status.isEmpty
-                                  ? AppPreferences.of(
-                                      context,
-                                    ).t('app.notConnected')
-                                  : _status,
-                              hasDevice: _activeDevice != null,
-                              onConnect: () => _connect(),
-                            ),
-                          if (_hasShownTerminal &&
-                              showHostSyncOverlay &&
-                              !_terminalUploadLoading &&
-                              !_terminalBufferLoading)
-                            Positioned.fill(
-                              child: IgnorePointer(
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: AppColors.bgBase.withValues(
-                                      alpha: 0.58,
+                                },
+                              )
+                            else
+                              ConnectHint(
+                                status: _status.isEmpty
+                                    ? AppPreferences.of(
+                                        context,
+                                      ).t('app.notConnected')
+                                    : _status,
+                                hasDevice: _activeDevice != null,
+                                onConnect: () => _connect(),
+                              ),
+                            if (_hasShownTerminal &&
+                                showHostSyncOverlay &&
+                                !_terminalUploadLoading &&
+                                !_terminalBufferLoading)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: AppColors.bgBase.withValues(
+                                        alpha: 0.58,
+                                      ),
                                     ),
-                                  ),
-                                  child: Center(
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.secondary,
+                                    child: Center(
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Theme.of(
+                                                context,
+                                              ).colorScheme.secondary,
+                                            ),
                                           ),
-                                        ),
-                                        const SizedBox(width: AppSpacing.s),
-                                        Text(
-                                          _connectionStatusText,
-                                          style: const TextStyle(
-                                            color: AppColors.textSecondary,
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w600,
+                                          const SizedBox(width: AppSpacing.s),
+                                          Text(
+                                            _connectionStatusText,
+                                            style: const TextStyle(
+                                              color: AppColors.textSecondary,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                          if (_hasShownTerminal &&
-                              _workspaceMode == 'terminal' &&
-                              (showUploadOverlay || showHistoryOverlay))
-                            Positioned.fill(
-                              child: IgnorePointer(
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: AppColors.bgBase.withValues(
-                                      alpha: 0.72,
+                            if (_hasShownTerminal &&
+                                _workspaceMode == 'terminal' &&
+                                (showUploadOverlay || showHistoryOverlay))
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: AppColors.bgBase.withValues(
+                                        alpha: 0.72,
+                                      ),
                                     ),
-                                  ),
-                                  child: Center(
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.secondary,
+                                    child: Center(
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Theme.of(
+                                                context,
+                                              ).colorScheme.secondary,
+                                            ),
                                           ),
-                                        ),
-                                        const SizedBox(width: AppSpacing.s),
-                                        Text(
-                                          showUploadOverlay
-                                              ? _terminalUploadStatus
-                                              : _t('terminal.loadingHistory'),
-                                          style: const TextStyle(
-                                            color: AppColors.textSecondary,
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w600,
+                                          const SizedBox(width: AppSpacing.s),
+                                          Text(
+                                            showUploadOverlay
+                                                ? _terminalUploadStatus
+                                                : _t('terminal.loadingHistory'),
+                                            style: const TextStyle(
+                                              color: AppColors.textSecondary,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
+                            FadeTransition(
+                              opacity: _maskOpacity,
+                              child: const TerminalTransitionMask(),
                             ),
-                          FadeTransition(
-                            opacity: _maskOpacity,
-                            child: const TerminalTransitionMask(),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),

@@ -268,6 +268,7 @@ const Map<String, String> _zhCN = {
   'connection.failedRetry': '连接失败，后台重试中',
   'connection.failedWithReason': '连接失败：{reason}',
   'connection.macDisconnected': 'Mac 端未连接',
+  'connection.upgradeRequired': '协议版本不兼容，请升级应用',
   'terminal.creating': '正在创建终端，请稍后再输入',
   'terminal.createOrSelectFirst': '请先创建或选择终端',
   'terminal.loadingHistory': '正在加载终端历史...',
@@ -604,6 +605,8 @@ const Map<String, String> _en = {
   'connection.failedRetry': 'Connection failed, retrying in background',
   'connection.failedWithReason': 'Connection failed: {reason}',
   'connection.macDisconnected': 'Mac is not connected',
+  'connection.upgradeRequired':
+      'Protocol version is incompatible. Please update the app',
   'terminal.creating': 'Creating terminal, please wait before typing',
   'terminal.createOrSelectFirst': 'Create or select a terminal first',
   'terminal.loadingHistory': 'Loading terminal history...',

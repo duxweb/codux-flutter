@@ -5,6 +5,7 @@ import android.annotation.TargetApi;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.graphics.Color;
 import android.graphics.Canvas;
 import android.graphics.Typeface;
 import android.os.Build;
@@ -95,11 +96,17 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
 
     private static final String LOG_TAG = "TerminalView";
     private static final String TERMINAL_FONT_ASSET = "fonts/MapleMono-NF-CN-Regular.ttf";
+    private static final float TERMINAL_TEXT_SIZE_SP = 11.5f;
+    private static final int TERMINAL_BACKGROUND_COLOR = Color.rgb(13, 17, 23);
 
     public RemoteTerminalView(Context context, AttributeSet attributes) { // NO_UCD (unused code)
         super(context, attributes);
         setFocusable(true);
         setFocusableInTouchMode(true);
+        setBackgroundColor(TERMINAL_BACKGROUND_COLOR);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            setDefaultFocusHighlightEnabled(false);
+        }
         mGestureRecognizer = new GestureAndScaleRecognizer(context, new GestureAndScaleRecognizer.Listener() {
 
             boolean scrolledWithFinger;
@@ -259,7 +266,7 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
             }
         };
         attachSession(createRemoteTerminalSession());
-        setTextSize(Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 13, getResources().getDisplayMetrics())));
+        setTextSize(Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, TERMINAL_TEXT_SIZE_SP, getResources().getDisplayMetrics())));
         setTypeface(loadTerminalTypeface());
         setTerminalCursorBlinkerRate(700);
         setTerminalCursorBlinkerState(true, false);
@@ -773,7 +780,7 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
     /**
      * Sets the text size, which in turn sets the number of rows and columns.
      *
-     * @param textSize the new font size, in density-independent pixels.
+     * @param textSize the new font size, in physical pixels.
      */
     public void setTextSize(int textSize) {
         mRenderer = new TerminalRenderer(textSize, mRenderer == null ? Typeface.MONOSPACE : mRenderer.mTypeface);
@@ -1248,7 +1255,7 @@ public final class RemoteTerminalView extends View implements TerminalSessionCli
     @Override
     protected void onDraw(Canvas canvas) {
         if (mEmulator == null) {
-            canvas.drawColor(0XFF000000);
+            canvas.drawColor(TERMINAL_BACKGROUND_COLOR);
         } else {
             // render the terminal view and highlight any selected text
             int[] sel = mDefaultSelectors;

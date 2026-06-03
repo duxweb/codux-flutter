@@ -1,5 +1,6 @@
 import Flutter
 import GhosttyTerminal
+import ObjectiveC.runtime
 import UIKit
 
 public final class CoduxNativeTerminalPlugin: NSObject, FlutterPlugin {
@@ -143,6 +144,7 @@ private final class CoduxGhosttyTerminalHostView: UIView {
         isOpaque = true
 
         terminalView.translatesAutoresizingMaskIntoConstraints = false
+        disableTerminalInputAccessory(terminalView)
         terminalView.backgroundColor = .clear
         terminalView.isOpaque = false
         terminalView.controller = terminalController
@@ -470,4 +472,27 @@ private final class CoduxTerminalPlatformView: NSObject, FlutterPlatformView, Fl
 
 private final class CoduxEventSinkBox {
     var sink: FlutterEventSink?
+}
+
+private func disableTerminalInputAccessory(_ view: UIView) {
+    let selector = #selector(getter: UIResponder.inputAccessoryView)
+    let className = "\(NSStringFromClass(type(of: view)))_CoduxNoAccessory"
+    let subclass: AnyClass
+    if let existing = NSClassFromString(className) {
+        subclass = existing
+    } else {
+        guard let created = objc_allocateClassPair(type(of: view), className, 0) else {
+            return
+        }
+        let block: @convention(block) (AnyObject) -> UIView? = { _ in nil }
+        class_addMethod(
+            created,
+            selector,
+            imp_implementationWithBlock(block),
+            "@@:"
+        )
+        objc_registerClassPair(created)
+        subclass = created
+    }
+    object_setClass(view, subclass)
 }

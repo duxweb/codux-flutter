@@ -191,6 +191,10 @@ void main() {
         'type': 'hello',
         'payload': {'role': 'client'},
       });
+      relay.channels.single.emit({
+        'type': 'host.info',
+        'payload': {'name': 'Mac', 'protocolVersion': 'v1.0'},
+      });
       await _pumpUntil(
         tester,
         () => relay.channels.single.sink.sent.length >= 4,
@@ -301,9 +305,52 @@ void main() {
     expect(find.text('同步中'), findsNothing);
     expect(find.text('中继'), findsNothing);
   });
+
+  testWidgets('incompatible host protocol blocks reconnect for this run', (
+    tester,
+  ) async {
+    final relay = _FakeRelayFactory();
+
+    await tester.pumpWidget(
+      CoduxFlutterApp(
+        relaySocketFactory: relay.call,
+        initialDevices: [_device()],
+      ),
+    );
+    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
+    final channel = relay.channels.single;
+
+    channel.emit({
+      'type': 'hello',
+      'payload': {'role': 'client'},
+    });
+    await tester.pump();
+    channel.emit({
+      'type': 'host.info',
+      'payload': {'name': 'Mac', 'protocolVersion': 'v2.0'},
+    });
+    await _pumpUntil(
+      tester,
+      () => find.text('协议版本不兼容，请升级应用').evaluate().isNotEmpty,
+    );
+
+    expect(find.text('协议版本不兼容，请升级应用'), findsWidgets);
+    expect(channel.sink.closed, isTrue);
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(relay.channels.length, 1);
+
+    await tester.tap(find.text('Mac').first);
+    await tester.pump();
+    expect(relay.channels.length, 1);
+  });
 }
 
 void _emitHostReady(_FakeRelayChannel channel) {
+  channel.emit({
+    'type': 'host.info',
+    'payload': {'name': 'Mac', 'protocolVersion': 'v1.0'},
+  });
   channel.emit({
     'type': 'project.list',
     'payload': {
