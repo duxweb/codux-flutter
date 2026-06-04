@@ -249,9 +249,7 @@ class ProjectTabBar extends StatelessWidget {
 }
 
 bool _isSplitTerminal(TerminalInfo terminal) {
-  return terminal.resizeOwner == 'mac' ||
-      terminal.kind == 'desktop-shared' ||
-      terminal.ownerKind == 'mac';
+  return terminal.id.isNotEmpty && terminal.projectId.isNotEmpty;
 }
 
 List<PopupMenuEntry<String>> _terminalMenuSection({

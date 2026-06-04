@@ -193,49 +193,23 @@ class TerminalInfo {
     required this.id,
     required this.title,
     required this.projectId,
-    this.kind,
-    this.ownerKind,
-    this.ownerDeviceId,
-    this.resizeOwner,
-    this.slotId,
-    this.sessionKey,
-    this.paneIndex,
-    this.sortOrder,
     this.cols,
     this.rows,
     this.status,
+    this.createdAt,
   });
   final String id;
   final String title;
   final String projectId;
-  final String? kind;
-  final String? ownerKind;
-  final String? ownerDeviceId;
-  final String? resizeOwner;
-  final String? slotId;
-  final String? sessionKey;
-  final int? paneIndex;
-  final int? sortOrder;
   final int? cols;
   final int? rows;
   final String? status;
+  final String? createdAt;
 
   factory TerminalInfo.fromJson(Map<String, dynamic> json) => TerminalInfo(
     id: '${json['id'] ?? ''}',
     title: '${json['title'] ?? 'Terminal'}',
     projectId: '${json['projectId'] ?? ''}',
-    kind: json['kind']?.toString(),
-    ownerKind: json['ownerKind']?.toString(),
-    ownerDeviceId: json['ownerDeviceId']?.toString(),
-    resizeOwner: json['resizeOwner']?.toString(),
-    slotId: json['slotId']?.toString(),
-    sessionKey: json['sessionKey']?.toString(),
-    paneIndex: json['paneIndex'] is num
-        ? (json['paneIndex'] as num).toInt()
-        : int.tryParse('${json['paneIndex'] ?? ''}'),
-    sortOrder: json['sortOrder'] is num
-        ? (json['sortOrder'] as num).toInt()
-        : int.tryParse('${json['sortOrder'] ?? ''}'),
     cols: json['cols'] is num
         ? (json['cols'] as num).toInt()
         : int.tryParse('${json['cols'] ?? ''}'),
@@ -243,6 +217,7 @@ class TerminalInfo {
         ? (json['rows'] as num).toInt()
         : int.tryParse('${json['rows'] ?? ''}'),
     status: json['status']?.toString(),
+    createdAt: json['createdAt']?.toString(),
   );
 }
 

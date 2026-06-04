@@ -171,7 +171,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   String? _selectedProjectId;
   String? _sessionId;
   String? _creatingTerminalProjectId;
-  final Set<String> _ownedTerminalIds = {};
   bool _showSettings = false;
   bool _showScanner = false;
   PairingPayload? _pendingPairing;
@@ -976,7 +975,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _sessionId = null;
         _terminalBufferRetry.reset();
         _terminalBufferLoading = false;
-        _ownedTerminalIds.clear();
       }
       _activeDevice = target;
     });
@@ -1502,11 +1500,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           }
           setState(() {
             _terminals = next;
-            for (final terminal in next) {
-              if (_hasCurrentDeviceOwner(terminal)) {
-                _ownedTerminalIds.add(terminal.id);
-              }
-            }
             _terminalListLoaded = true;
             if (activeSessionMissing) {
               _sessionId = null;
@@ -1526,9 +1519,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               '[codux-flutter-terminal] created session=${terminal.id} project=${terminal.projectId}',
             );
             setState(() {
-              if (_hasCurrentDeviceOwner(terminal)) {
-                _ownedTerminalIds.add(terminal.id);
-              }
               _terminals = [
                 terminal,
                 ..._terminals.where((item) => item.id != terminal.id),
@@ -1559,7 +1549,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                 .where((item) => item.id != closedSessionId)
                 .toList();
             if (closedSessionId != null) {
-              _ownedTerminalIds.remove(closedSessionId);
               _terminalOutputCache.remove(closedSessionId);
               _terminalBufferLengths.remove(closedSessionId);
               _terminalOutputSeqBySession.remove(closedSessionId);
@@ -2191,28 +2180,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
   }
 
-  bool _isOwnedByCurrentDevice(TerminalInfo terminal) {
-    if (_ownedTerminalIds.contains(terminal.id)) return true;
-    return _hasCurrentDeviceOwner(terminal);
-  }
-
-  bool _isSharedMacTerminal(TerminalInfo terminal) {
-    return terminal.resizeOwner == 'mac' ||
-        terminal.kind == 'desktop-shared' ||
-        terminal.ownerKind == 'mac';
-  }
-
   bool _isAccessibleTerminal(TerminalInfo terminal) {
-    return _isOwnedByCurrentDevice(terminal) || _isSharedMacTerminal(terminal);
-  }
-
-  bool _hasCurrentDeviceOwner(TerminalInfo terminal) {
-    final ownerDeviceId = terminal.ownerDeviceId;
-    final activeDeviceId = _activeDevice?.deviceId;
-    return activeDeviceId != null &&
-        ownerDeviceId != null &&
-        ownerDeviceId.isNotEmpty &&
-        ownerDeviceId == activeDeviceId;
+    return terminal.id.isNotEmpty && terminal.projectId.isNotEmpty;
   }
 
   TerminalInfo? _currentTerminal() {
@@ -2225,12 +2194,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   bool _canResizeTerminal(TerminalInfo? terminal) {
-    if (terminal == null) return false;
-    if (_isSharedMacTerminal(terminal)) return true;
-    if (terminal.resizeOwner == 'mobile') {
-      return _isOwnedByCurrentDevice(terminal);
-    }
-    return false;
+    return terminal != null && _isAccessibleTerminal(terminal);
   }
 
   List<TerminalInfo> _currentProjectTerminals() {
@@ -2246,17 +2210,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   int _compareTerminals(TerminalInfo left, TerminalInfo right) {
-    final order = _compareNullableInt(left.sortOrder, right.sortOrder);
-    if (order != 0) return order;
-    final pane = _compareNullableInt(left.paneIndex, right.paneIndex);
-    if (pane != 0) return pane;
+    final createdAt = (left.createdAt ?? '').compareTo(right.createdAt ?? '');
+    if (createdAt != 0) return createdAt;
     return left.id.compareTo(right.id);
-  }
-
-  int _compareNullableInt(int? left, int? right) {
-    final leftValue = left ?? 0x7fffffff;
-    final rightValue = right ?? 0x7fffffff;
-    return leftValue.compareTo(rightValue);
   }
 
   TerminalInfo _preferredTerminalForProject(
@@ -2318,7 +2274,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _terminalInputBatcher.reset();
     setState(() {
       _terminals = _terminals.where((item) => item.id != terminal.id).toList();
-      _ownedTerminalIds.remove(terminal.id);
       _terminalOutputCache.remove(terminal.id);
       _terminalBufferLengths.remove(terminal.id);
       _terminalOutputSeqBySession.remove(terminal.id);
@@ -2370,7 +2325,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _terminals = _terminals
             .where((item) => item.id != closingSessionId)
             .toList();
-        _ownedTerminalIds.remove(closingSessionId);
         _terminalOutputCache.remove(closingSessionId);
         _terminalBufferLengths.remove(closingSessionId);
         _terminalOutputSeqBySession.remove(closingSessionId);
@@ -2901,6 +2855,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _terminalCursorBottom = 0;
       }
     });
+    _send(
+      RelayEnvelope(type: 'project.select', payload: {'projectId': project.id}),
+    );
     if (_workspaceMode == 'stats') {
       _requestAIStats();
       return;
