@@ -131,7 +131,7 @@ jobs:
         run: |
           rm -rf dist
           mkdir -p dist
-          flutter build apk --release \
+          flutter build apk --release --target-platform android-arm64 \
             --build-name "${{ steps.meta.outputs.version }}" \
             --build-number "${{ steps.meta.outputs.build_number }}" \
             --dart-define "CODUX_LOG_LEVEL=${{ github.event.inputs.log_level || 'warn' }}"

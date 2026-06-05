@@ -40,6 +40,16 @@ android {
         }
     }
 
+    packaging {
+        jniLibs {
+            excludes += listOf(
+                "lib/armeabi-v7a/**",
+                "lib/x86/**",
+                "lib/x86_64/**"
+            )
+        }
+    }
+
     signingConfigs {
         create("release") {
             val storeFilePath = keystoreProperties.getProperty("storeFile")
