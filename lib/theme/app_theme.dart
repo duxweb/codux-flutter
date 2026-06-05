@@ -49,6 +49,10 @@ ThemeData buildAppTheme({Color accent = AppColors.cyan}) {
     useMaterial3: true,
     brightness: Brightness.dark,
     scaffoldBackgroundColor: AppColors.bgBase,
+    focusColor: Colors.transparent,
+    hoverColor: Colors.transparent,
+    splashColor: Colors.transparent,
+    highlightColor: Colors.transparent,
     colorScheme: ColorScheme.dark(
       primary: accent,
       surface: AppColors.bgSurface,

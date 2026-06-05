@@ -225,27 +225,27 @@ async fn run_client(
             }
         });
         emit(&events, json!({ "type": "state", "state": "connected" }));
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|error| error.to_string())?;
         loop {
             tokio::select! {
-                inbound = connection.accept_bi() => {
-                    let Ok((mut send, mut recv)) = inbound else {
-                        break;
-                    };
-                    let data = read_frame(&mut recv).await?;
+                inbound = read_frame(&mut recv) => {
+                    let data = inbound?;
                     if let Ok(envelope) = serde_json::from_slice::<Value>(&data) {
                         emit(&events, json!({ "type": "envelope", "envelope": envelope }));
                     }
-                    let _ = write_frame(&mut send, br#"{"ok":true}"#).await;
-                    let _ = send.finish();
                 }
                 outbound = rx.recv() => {
                     let Some(data) = outbound else {
                         break;
                     };
-                    send_frame(&connection, &data).await?;
+                    write_frame(&mut send, &data).await?;
                 }
             }
         }
+        let _ = send.finish();
         conn_type_task.abort();
         endpoint.close().await;
         Ok::<(), String>(())
@@ -263,15 +263,6 @@ async fn run_client(
             client.closed = true;
         }
     }
-}
-
-async fn send_frame(connection: &iroh::endpoint::Connection, data: &[u8]) -> Result<(), String> {
-    let (mut send, _) = connection
-        .open_bi()
-        .await
-        .map_err(|error| error.to_string())?;
-    write_frame(&mut send, data).await?;
-    send.finish().map_err(|error| error.to_string())
 }
 
 async fn write_frame<W>(writer: &mut W, data: &[u8]) -> Result<(), String>

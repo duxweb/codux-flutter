@@ -25,6 +25,8 @@ import 'services/storage_service.dart';
 import 'services/terminal_buffer_retry.dart';
 import 'services/terminal_input_batcher.dart';
 import 'services/terminal_input_payload.dart';
+import 'services/terminal_output_resync.dart';
+import 'services/terminal_output_sequencer.dart';
 import 'services/terminal_payload_codec.dart';
 import 'services/terminal_upload_sender.dart';
 import 'theme/app_theme.dart';
@@ -49,6 +51,7 @@ enum _TerminalUploadSource { file, image }
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  FocusManager.instance.highlightStrategy = FocusHighlightStrategy.alwaysTouch;
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -146,7 +149,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   String _pendingTerminalOutput = '';
   final Map<String, String> _terminalOutputCache = {};
   final Map<String, int> _terminalBufferLengths = {};
-  final Map<String, int> _terminalOutputSeqBySession = {};
+  final TerminalOutputSequencer _terminalOutputSequencer =
+      TerminalOutputSequencer();
   final Map<String, String> _lastTerminalIdByProject = {};
   final Set<String> _protocolBlockedHostIds = {};
   double _terminalCursorBottom = 0;
@@ -1436,7 +1440,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             if (missingSessionId != null) {
               _terminalOutputCache.remove(missingSessionId);
               _terminalBufferLengths.remove(missingSessionId);
-              _terminalOutputSeqBySession.remove(missingSessionId);
+              _terminalOutputSequencer.remove(missingSessionId);
               _lastTerminalIdByProject.removeWhere(
                 (_, terminalId) => terminalId == missingSessionId,
               );
@@ -1494,7 +1498,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             if (closedSessionId != null) {
               _terminalOutputCache.remove(closedSessionId);
               _terminalBufferLengths.remove(closedSessionId);
-              _terminalOutputSeqBySession.remove(closedSessionId);
+              _terminalOutputSequencer.remove(closedSessionId);
               _lastTerminalIdByProject.removeWhere(
                 (_, terminalId) => terminalId == closedSessionId,
               );
@@ -1833,11 +1837,27 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     final raw = decoded.data;
     final isBuffer = decoded.isBuffer;
     final outputSeq = _intPayloadValue(payload['outputSeq']);
-    final previousSeq = _terminalOutputSeqBySession[sessionId] ?? 0;
-    if (!isBuffer && outputSeq != null && outputSeq <= previousSeq) {
-      _sendTerminalOutputAck(sessionId, outputSeq, decoded.bufferLength);
+    final resync = observeTerminalOutputForResync(
+      sequencer: _terminalOutputSequencer,
+      sessionId: sessionId,
+      isBuffer: isBuffer,
+      outputSeq: outputSeq,
+      offset: decoded.offset,
+    );
+    if (!resync.render && !resync.requestFullBuffer) {
+      _ackTerminalOutputIfNeeded(sessionId, resync.ack, decoded.bufferLength);
       CoduxLog.debug(
-        '[codux-flutter-output] drop duplicate seq=$outputSeq previous=$previousSeq session=$sessionId',
+        '[codux-flutter-output] drop duplicate seq=${resync.ack} session=$sessionId',
+      );
+      return;
+    }
+    if (resync.requestFullBuffer) {
+      _ackTerminalOutputIfNeeded(sessionId, resync.ack, decoded.bufferLength);
+      _terminalBufferLengths[sessionId] = 0;
+      _terminalBufferRetry.resetLastBuffered();
+      _requestBufferIfReady(force: true, full: true);
+      CoduxLog.warn(
+        '[codux-flutter-output] gap seq=${resync.ack} session=$sessionId',
       );
       return;
     }
@@ -1871,12 +1891,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _writeTerminalData(raw, replayingBuffer: true);
       }
     }
-    if (outputSeq != null) {
-      if (outputSeq > previousSeq) {
-        _terminalOutputSeqBySession[sessionId] = outputSeq;
-      }
-      _sendTerminalOutputAck(sessionId, outputSeq, decoded.bufferLength);
-    }
+    _ackTerminalOutputIfNeeded(sessionId, resync.ack, decoded.bufferLength);
   }
 
   void _handleTerminalUploaded(RelayEnvelope message) {
@@ -1936,8 +1951,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                 'offset': full ? 0 : (_terminalBufferLengths[sessionId] ?? 0),
                 if (_pendingTerminalCols != null) 'cols': _pendingTerminalCols,
                 if (_pendingTerminalRows != null) 'rows': _pendingTerminalRows,
-                if (!full && (_terminalOutputSeqBySession[sessionId] ?? 0) > 0)
-                  'resumeFromSeq': _terminalOutputSeqBySession[sessionId],
+                if (!full &&
+                    _terminalOutputSequencer.sequenceFor(sessionId) > 0)
+                  'resumeFromSeq': _terminalOutputSequencer.sequenceFor(
+                    sessionId,
+                  ),
               },
             ),
           ),
@@ -2265,6 +2283,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
   }
 
+  void _ackTerminalOutputIfNeeded(
+    String sessionId,
+    int? outputSeq,
+    int? bufferLength,
+  ) {
+    if (outputSeq == null) return;
+    _sendTerminalOutputAck(sessionId, outputSeq, bufferLength);
+  }
+
   int? _intPayloadValue(Object? value) {
     if (value is int) return value;
     if (value is num) return value.toInt();
@@ -2434,7 +2461,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _terminals = _terminals.where((item) => item.id != terminal.id).toList();
       _terminalOutputCache.remove(terminal.id);
       _terminalBufferLengths.remove(terminal.id);
-      _terminalOutputSeqBySession.remove(terminal.id);
+      _terminalOutputSequencer.remove(terminal.id);
       _lastTerminalIdByProject.removeWhere(
         (_, terminalId) => terminalId == terminal.id,
       );
@@ -2703,7 +2730,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             .toList();
         _terminalOutputCache.remove(closingSessionId);
         _terminalBufferLengths.remove(closingSessionId);
-        _terminalOutputSeqBySession.remove(closingSessionId);
+        _terminalOutputSequencer.remove(closingSessionId);
         _lastTerminalIdByProject.removeWhere(
           (_, terminalId) => terminalId == closingSessionId,
         );
