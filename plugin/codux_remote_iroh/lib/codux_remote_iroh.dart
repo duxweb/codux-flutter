@@ -10,12 +10,15 @@ typedef CoduxRemoteIrohEnvelopeHandler =
 typedef CoduxRemoteIrohStateHandler = void Function(String state);
 
 typedef _ConnectNative = ffi.Uint64 Function(ffi.Pointer<ffi.Char>);
+typedef _AddNodeAddrNative =
+    ffi.Bool Function(ffi.Uint64, ffi.Pointer<ffi.Char>);
 typedef _SendNative = ffi.Bool Function(ffi.Uint64, ffi.Pointer<ffi.Char>);
 typedef _PollNative = ffi.Pointer<ffi.Char> Function(ffi.Uint64);
 typedef _CloseNative = ffi.Void Function(ffi.Uint64);
 typedef _FreeStringNative = ffi.Void Function(ffi.Pointer<ffi.Char>);
 
 typedef _ConnectDart = int Function(ffi.Pointer<ffi.Char>);
+typedef _AddNodeAddrDart = bool Function(int, ffi.Pointer<ffi.Char>);
 typedef _SendDart = bool Function(int, ffi.Pointer<ffi.Char>);
 typedef _PollDart = ffi.Pointer<ffi.Char> Function(int);
 typedef _CloseDart = void Function(int);
@@ -53,6 +56,12 @@ class CoduxRemoteIroh {
     return _bridgeOrLoad().send(handle, envelope);
   }
 
+  Future<bool> addNodeAddr(Map<String, dynamic> nodeAddr) async {
+    final handle = _handle;
+    if (handle == 0) return false;
+    return _bridgeOrLoad().addNodeAddr(handle, nodeAddr);
+  }
+
   Future<void> close() async {
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -83,6 +92,7 @@ class CoduxRemoteIroh {
         final state = '${event['state'] ?? ''}';
         final detail = switch (state) {
           'path' => _formatPathState(event),
+          'resolving' => _formatResolvingState(event),
           _ => '${event['error'] ?? ''}'.trim(),
         };
         if (state == 'closed' || state == 'failed') {
@@ -105,12 +115,24 @@ class CoduxRemoteIroh {
     if (path.isEmpty) return detail;
     return detail.isEmpty ? 'path=$path' : 'path=$path;detail=$detail';
   }
+
+  String _formatResolvingState(Map<String, dynamic> event) {
+    final nodeId = '${event['nodeId'] ?? ''}'.trim();
+    final relayUrl = '${event['relayUrl'] ?? ''}'.trim();
+    final directAddressCount = event['directAddressCount'];
+    return [
+      if (nodeId.isNotEmpty) 'nodeId=$nodeId',
+      if (relayUrl.isNotEmpty) 'relay=$relayUrl',
+      if (directAddressCount != null) 'direct=$directAddressCount',
+    ].join(';');
+  }
 }
 
 abstract interface class CoduxRemoteIrohBridge {
   factory CoduxRemoteIrohBridge.load() = _NativeCoduxRemoteIrohBridge.load;
 
   int connect(Map<String, dynamic> config);
+  bool addNodeAddr(int handle, Map<String, dynamic> nodeAddr);
   bool send(int handle, Map<String, dynamic> envelope);
   Map<String, dynamic>? pollEvent(int handle);
   void close(int handle);
@@ -122,6 +144,10 @@ class _NativeCoduxRemoteIrohBridge implements CoduxRemoteIrohBridge {
         'codux_iroh_connect',
       ),
       _send = library.lookupFunction<_SendNative, _SendDart>('codux_iroh_send'),
+      _addNodeAddr = library
+          .lookupFunction<_AddNodeAddrNative, _AddNodeAddrDart>(
+            'codux_iroh_add_node_addr',
+          ),
       _poll = library.lookupFunction<_PollNative, _PollDart>(
         'codux_iroh_poll_event',
       ),
@@ -147,6 +173,7 @@ class _NativeCoduxRemoteIrohBridge implements CoduxRemoteIrohBridge {
   }
 
   final _ConnectDart _connect;
+  final _AddNodeAddrDart _addNodeAddr;
   final _SendDart _send;
   final _PollDart _poll;
   final _CloseDart _close;
@@ -169,6 +196,17 @@ class _NativeCoduxRemoteIrohBridge implements CoduxRemoteIrohBridge {
     final pointer = json.toNativeUtf8().cast<ffi.Char>();
     try {
       return _send(handle, pointer);
+    } finally {
+      calloc.free(pointer);
+    }
+  }
+
+  @override
+  bool addNodeAddr(int handle, Map<String, dynamic> nodeAddr) {
+    final json = jsonEncode(nodeAddr);
+    final pointer = json.toNativeUtf8().cast<ffi.Char>();
+    try {
+      return _addNodeAddr(handle, pointer);
     } finally {
       calloc.free(pointer);
     }

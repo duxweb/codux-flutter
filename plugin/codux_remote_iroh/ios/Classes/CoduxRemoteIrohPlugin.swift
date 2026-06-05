@@ -10,6 +10,9 @@ private func coduxIrohConnect(_ configJson: UnsafePointer<CChar>) -> UInt64
 @_silgen_name("codux_iroh_send")
 private func coduxIrohSend(_ handle: UInt64, _ envelopeJson: UnsafePointer<CChar>) -> Bool
 
+@_silgen_name("codux_iroh_add_node_addr")
+private func coduxIrohAddNodeAddr(_ handle: UInt64, _ nodeAddrJson: UnsafePointer<CChar>) -> Bool
+
 @_silgen_name("codux_iroh_poll_event")
 private func coduxIrohPollEvent(_ handle: UInt64) -> UnsafeMutablePointer<CChar>?
 
@@ -21,6 +24,7 @@ public final class CoduxRemoteIrohPlugin: NSObject, FlutterPlugin {
         "".withCString { empty in
             _ = coduxIrohConnect(empty)
             _ = coduxIrohSend(0, empty)
+            _ = coduxIrohAddNodeAddr(0, empty)
         }
         _ = coduxIrohPollEvent(0)
         coduxIrohFreeString(nil)

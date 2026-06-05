@@ -47,7 +47,11 @@ class IrohNodeAddr {
         .toList(),
   );
 
-  IrohNodeAddr stable() => IrohNodeAddr(nodeId: nodeId);
+  IrohNodeAddr stable() => IrohNodeAddr(
+    nodeId: nodeId,
+    relayUrl: relayUrl,
+    directAddresses: directAddresses.toSet().toList(),
+  );
 
   Map<String, dynamic> toJson() => {
     'nodeId': nodeId,

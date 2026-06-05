@@ -69,6 +69,33 @@ void main() {
 
     expect(states, contains('path:path=direct;detail=192.168.1.2:12345'));
   });
+
+  test('transport forwards resolving address counts', () async {
+    final bridge = _FakeIrohBridge(
+      events: [
+        {
+          'type': 'state',
+          'state': 'resolving',
+          'nodeId': 'node-1',
+          'relayUrl': 'https://relay.iroh.network',
+          'directAddressCount': 2,
+        },
+      ],
+    );
+    final transport = CoduxRemoteIroh(bridge: bridge);
+    final states = <String>[];
+    transport.onState = states.add;
+
+    await transport.connect(nodeAddr: {'nodeId': 'node-1'});
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect(
+      states,
+      contains(
+        'resolving:nodeId=node-1;relay=https://relay.iroh.network;direct=2',
+      ),
+    );
+  });
 }
 
 final class _FakeIrohBridge implements CoduxRemoteIrohBridge {
@@ -99,6 +126,9 @@ final class _FakeIrohBridge implements CoduxRemoteIrohBridge {
     sent.add(envelope);
     return true;
   }
+
+  @override
+  bool addNodeAddr(int handle, Map<String, dynamic> nodeAddr) => true;
 
   @override
   Map<String, dynamic>? pollEvent(int handle) {

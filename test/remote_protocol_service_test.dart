@@ -86,8 +86,13 @@ void main() {
       expect(confirmed.transport, 'iroh');
       expect(confirmed.server, isEmpty);
       expect(confirmed.iroh?.nodeId, 'node-1');
-      expect(confirmed.iroh?.directAddresses, isEmpty);
-      expect(confirmed.toJson()['iroh'], {'nodeId': 'node-1'});
+      expect(confirmed.iroh?.relayUrl, 'https://relay.iroh.network');
+      expect(confirmed.iroh?.directAddresses, ['127.0.0.1:12345']);
+      expect(confirmed.toJson()['iroh'], {
+        'nodeId': 'node-1',
+        'relayUrl': 'https://relay.iroh.network',
+        'directAddresses': ['127.0.0.1:12345'],
+      });
       expect(confirmed.devicePublicKey, payload.devicePublicKey);
     },
   );

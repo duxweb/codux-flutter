@@ -62,6 +62,7 @@ impl RemoteIrohNodeAddr {
 }
 
 struct ClientHandle {
+    endpoint: Option<Endpoint>,
     tx: mpsc::UnboundedSender<Vec<u8>>,
     events: std::sync::Arc<Mutex<VecDeque<String>>>,
     closed: bool,
@@ -82,6 +83,7 @@ pub extern "C" fn codux_iroh_connect(config_json: *const c_char) -> u64 {
         clients.insert(
             handle,
             ClientHandle {
+                endpoint: None,
                 tx,
                 events: events.clone(),
                 closed: false,
@@ -105,6 +107,29 @@ pub extern "C" fn codux_iroh_send(handle: u64, envelope_json: *const c_char) -> 
         return false;
     };
     client.send(message.into_bytes()).is_ok()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn codux_iroh_add_node_addr(handle: u64, node_addr_json: *const c_char) -> bool {
+    let Some(config) = read_c_string(node_addr_json) else {
+        return false;
+    };
+    let Ok(node_addr) = serde_json::from_str::<RemoteIrohNodeAddr>(&config) else {
+        return false;
+    };
+    let Ok(node_addr) = node_addr.to_node_addr() else {
+        return false;
+    };
+    CLIENTS
+        .lock()
+        .ok()
+        .and_then(|clients| {
+            clients
+                .get(&handle)
+                .and_then(|client| client.endpoint.clone())
+        })
+        .map(|endpoint| endpoint.add_node_addr(node_addr).is_ok())
+        .unwrap_or(false)
 }
 
 #[unsafe(no_mangle)]
@@ -163,6 +188,11 @@ async fn run_client(
             .bind()
             .await
             .map_err(|error| error.to_string())?;
+        if let Ok(mut clients) = CLIENTS.lock() {
+            if let Some(client) = clients.get_mut(&handle) {
+                client.endpoint = Some(endpoint.clone());
+            }
+        }
         let node_addr = request.node_addr.to_node_addr()?;
         emit(
             &events,

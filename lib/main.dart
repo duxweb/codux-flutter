@@ -294,20 +294,18 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   String get _deviceListStatusText {
     if (!_isConnected) {
-      if (_isRecoveringConnection) return _t('app.reconnectingShort');
+      if (_isRecoveringConnection) return _t('app.connecting');
       if (_activeDevice != null && _backgroundConnect) {
         return _t('app.connecting');
       }
-      if (_status.isEmpty || _status == _t('app.connected')) {
-        return _t('app.notConnected');
-      }
-      return _status;
+      return _t('app.notConnected');
     }
-    if (!_hostResponsive) {
+    if (!_hostResponsive ||
+        !_projectListLoaded ||
+        !_terminalListLoaded ||
+        _irohConnectionPath == 'unknown' ||
+        _irohConnectionPath == 'none') {
       return _t('app.connecting');
-    }
-    if (!_projectListLoaded || !_terminalListLoaded) {
-      return _t('app.syncing');
     }
     return _terminalTransportStatusText;
   }
@@ -319,8 +317,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   String _irohConnectionPathLabel(String path) {
     return switch (path) {
       'direct' => _t('connection.direct'),
+      'mixed' => _t('connection.relay'),
       'relay' => _t('connection.relay'),
-      _ => 'Iroh',
+      _ => _t('app.connecting'),
     };
   }
 
@@ -476,6 +475,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _pingSentAt = null;
     _pendingPingId = null;
     if (nextLatency <= 0 || nextLatency > 60000) return;
+    CoduxLog.info(
+      '[codux-flutter-iroh] latency rtt=${nextLatency}ms path=$_irohConnectionPath',
+    );
     if (_latencyMs == nextLatency) return;
     setState(() => _latencyMs = nextLatency);
   }
@@ -1368,8 +1370,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           }
           _markHostResponsive('host.info', transport: 'iroh');
           final payload = message.payload;
-          if (payload is Map && payload['name'] != null) {
-            _updateDevice(target.deviceId, hostName: '${payload['name']}');
+          if (payload is Map) {
+            final iroh = _updateRuntimeIrohNodeAddr(payload['iroh']);
+            if (payload['name'] != null || iroh != null) {
+              _updateDevice(
+                target.deviceId,
+                hostName: payload['name']?.toString(),
+                iroh: iroh,
+              );
+            }
           }
           _markRemoteProtocolReady(
             force: !_projectListLoaded || !_terminalListLoaded,
@@ -1647,7 +1656,16 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (state == 'path') {
       final path = _parseIrohPath(detail);
       if (path != null) {
-        setState(() => _irohConnectionPath = path);
+        final changed = path != _irohConnectionPath;
+        _pingTimeoutTimer?.cancel();
+        _pingTimeoutTimer = null;
+        _pingSentAt = null;
+        _pendingPingId = null;
+        setState(() {
+          _irohConnectionPath = path;
+          if (changed) _latencyMs = null;
+        });
+        if (changed) _sendTransportPing();
       }
       return;
     }
@@ -1764,6 +1782,21 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
+  IrohNodeAddr? _updateRuntimeIrohNodeAddr(Object? value) {
+    if (value is! Map) return null;
+    final addr = IrohNodeAddr.fromJson(Map<String, dynamic>.from(value));
+    if (addr.nodeId.trim().isEmpty) return null;
+    CoduxLog.info(
+      '[codux-flutter-iroh] add runtime node addr nodeId=${addr.nodeId} relay=${addr.relayUrl ?? ''} direct=${addr.directAddresses.length}',
+    );
+    unawaited(
+      _irohTransport.addNodeAddr(addr.toJson()).then((added) {
+        CoduxLog.info('[codux-flutter-iroh] runtime node addr accepted=$added');
+      }),
+    );
+    return addr;
+  }
+
   void _handleIrohClosed(String reason) {
     _irohReady = false;
     if (_activeDevice?.transport != 'iroh') return;
@@ -1877,11 +1910,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  void _updateDevice(String deviceId, {String? hostName}) {
+  void _updateDevice(String deviceId, {String? hostName, IrohNodeAddr? iroh}) {
     final next = _devices
         .map(
           (item) => item.deviceId == deviceId
-              ? item.copyWith(hostName: hostName)
+              ? item.copyWith(hostName: hostName, iroh: iroh)
               : item,
         )
         .toList();
