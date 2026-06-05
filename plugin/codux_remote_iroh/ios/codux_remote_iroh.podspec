@@ -11,7 +11,7 @@ Pod::Spec.new do |s|
   s.platform         = :ios, '16.0'
   s.swift_version    = '5.0'
   s.vendored_frameworks = 'Rust/CoduxRemoteIrohBridge.xcframework'
-  s.frameworks       = 'SystemConfiguration'
+  s.frameworks       = 'SystemConfiguration', 'Network'
 
   s.prepare_command = <<-CMD
     set -euo pipefail

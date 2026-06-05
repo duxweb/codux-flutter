@@ -19,7 +19,7 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/sherpa_onnx_ios/ios"
 
 SPEC CHECKSUMS:
-  codux_remote_iroh: 26273d185e707dd1a0909053de40fd5aa1a3e507
+  codux_remote_iroh: 9904d8f6265b851e3d0a122e1cccd1b7b48d8fb8
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   sherpa_onnx_ios: dd99d1ea762b50700812684ce429a95709f3756e
 

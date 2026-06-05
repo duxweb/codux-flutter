@@ -4,6 +4,18 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-06-05
+
+### Changed
+
+- Upgraded the mobile Iroh transport bridge to `iroh` 1.0.0-rc.1 and forwards the configured relay URL into the native transport.
+- Prefer the first split terminal when opening a project so the default terminal matches the desktop layout.
+
+### Fixed
+
+- Fixed iOS bridge exports so `codux_iroh_add_node_addr` is available to the Swift plugin.
+- Linked the iOS Iroh bridge against `Network.framework` and re-signed embedded Flutter native asset frameworks with the active build identity.
+
 ## [1.6.0] - 2026-06-05
 
 ### Added

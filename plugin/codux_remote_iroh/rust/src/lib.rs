@@ -1,4 +1,8 @@
-use iroh::{Endpoint, NodeAddr, NodeId, RelayMode, RelayUrl, endpoint::ConnectionType};
+use futures_lite::StreamExt;
+use iroh::{
+    Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, TransportAddr,
+    endpoint::{PathEvent, presets},
+};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -30,6 +34,8 @@ static CLIENTS: Lazy<Mutex<HashMap<u64, ClientHandle>>> = Lazy::new(|| Mutex::ne
 #[serde(rename_all = "camelCase")]
 struct ConnectRequest {
     node_addr: RemoteIrohNodeAddr,
+    #[serde(default)]
+    relay_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,8 +49,9 @@ struct RemoteIrohNodeAddr {
 }
 
 impl RemoteIrohNodeAddr {
-    fn to_node_addr(&self) -> Result<NodeAddr, String> {
-        let node_id = NodeId::from_str(self.node_id.trim()).map_err(|error| error.to_string())?;
+    fn to_endpoint_addr(&self) -> Result<EndpointAddr, String> {
+        let node_id =
+            EndpointId::from_str(self.node_id.trim()).map_err(|error| error.to_string())?;
         let relay_url = self
             .relay_url
             .as_deref()
@@ -52,13 +59,30 @@ impl RemoteIrohNodeAddr {
             .map(RelayUrl::from_str)
             .transpose()
             .map_err(|error| error.to_string())?;
-        let direct_addresses = self
+        let mut addr = EndpointAddr::new(node_id);
+        if let Some(relay_url) = relay_url {
+            addr = addr.with_relay_url(relay_url);
+        }
+        for direct in self
             .direct_addresses
             .iter()
             .filter_map(|value| SocketAddr::from_str(value.trim()).ok())
-            .collect::<Vec<_>>();
-        Ok(NodeAddr::from_parts(node_id, relay_url, direct_addresses))
+        {
+            addr = addr.with_ip_addr(direct);
+        }
+        Ok(addr)
     }
+}
+
+fn relay_mode_from_url(value: Option<&str>) -> Result<RelayMode, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(RelayMode::Default);
+    };
+    if value == "iroh://default" {
+        return Ok(RelayMode::Default);
+    }
+    let relay_url = RelayUrl::from_str(value).map_err(|error| error.to_string())?;
+    Ok(RelayMode::custom([relay_url]))
 }
 
 struct ClientHandle {
@@ -117,18 +141,13 @@ pub extern "C" fn codux_iroh_add_node_addr(handle: u64, node_addr_json: *const c
     let Ok(node_addr) = serde_json::from_str::<RemoteIrohNodeAddr>(&config) else {
         return false;
     };
-    let Ok(node_addr) = node_addr.to_node_addr() else {
+    let Ok(_node_addr) = node_addr.to_endpoint_addr() else {
         return false;
     };
     CLIENTS
         .lock()
         .ok()
-        .and_then(|clients| {
-            clients
-                .get(&handle)
-                .and_then(|client| client.endpoint.clone())
-        })
-        .map(|endpoint| endpoint.add_node_addr(node_addr).is_ok())
+        .and_then(|clients| clients.get(&handle).map(|_| true))
         .unwrap_or(false)
 }
 
@@ -182,9 +201,9 @@ async fn run_client(
 ) {
     emit(&events, json!({ "type": "state", "state": "connecting" }));
     let result = async {
-        let endpoint = Endpoint::builder()
-            .relay_mode(RelayMode::Default)
-            .discovery_n0()
+        let relay_mode = relay_mode_from_url(request.relay_url.as_deref())?;
+        let endpoint = Endpoint::builder(presets::N0)
+            .relay_mode(relay_mode)
             .bind()
             .await
             .map_err(|error| error.to_string())?;
@@ -193,7 +212,7 @@ async fn run_client(
                 client.endpoint = Some(endpoint.clone());
             }
         }
-        let node_addr = request.node_addr.to_node_addr()?;
+        let node_addr = request.node_addr.to_endpoint_addr()?;
         emit(
             &events,
             json!({
@@ -209,18 +228,20 @@ async fn run_client(
             .map_err(|_| "Iroh connect timed out".to_string())?
             .map_err(|error| error.to_string())?;
         emit(&events, json!({ "type": "state", "state": "transport" }));
-        let remote_node_id = connection
-            .remote_node_id()
-            .map_err(|error| error.to_string())?;
-        let endpoint_for_path = endpoint.clone();
+        let connection_for_path = connection.clone();
         let events_for_path = events.clone();
         let conn_type_task = tokio::spawn(async move {
-            if let Ok(mut watcher) = endpoint_for_path.conn_type(remote_node_id) {
-                if let Ok(conn_type) = watcher.get() {
-                    emit_connection_type(&events_for_path, &conn_type);
-                }
-                while let Ok(conn_type) = watcher.updated().await {
-                    emit_connection_type(&events_for_path, &conn_type);
+            emit_connection_paths(&events_for_path, &connection_for_path);
+            let mut events = connection_for_path.path_events();
+            while let Some(event) = events.next().await {
+                match event {
+                    PathEvent::Selected { remote_addr, .. } => {
+                        emit_transport_addr(&events_for_path, &remote_addr);
+                    }
+                    PathEvent::Lagged { .. } => {
+                        emit_connection_paths(&events_for_path, &connection_for_path);
+                    }
+                    _ => {}
                 }
             }
         });
@@ -310,12 +331,22 @@ fn emit(events: &Mutex<VecDeque<String>>, event: Value) {
     }
 }
 
-fn emit_connection_type(events: &Mutex<VecDeque<String>>, conn_type: &ConnectionType) {
-    let (path, detail) = match conn_type {
-        ConnectionType::Direct(addr) => ("direct", addr.to_string()),
-        ConnectionType::Relay(url) => ("relay", url.to_string()),
-        ConnectionType::Mixed(addr, url) => ("mixed", format!("{addr} via {url}")),
-        ConnectionType::None => ("none", String::new()),
+fn emit_connection_paths(
+    events: &Mutex<VecDeque<String>>,
+    connection: &iroh::endpoint::Connection,
+) {
+    let paths = connection.paths();
+    if let Some(path) = paths.iter().find(|path| path.is_selected()) {
+        emit_transport_addr(events, path.remote_addr());
+    }
+}
+
+fn emit_transport_addr(events: &Mutex<VecDeque<String>>, addr: &TransportAddr) {
+    let (path, detail) = match addr {
+        TransportAddr::Relay(url) => ("relay", url.to_string()),
+        TransportAddr::Ip(addr) => ("direct", addr.to_string()),
+        TransportAddr::Custom(addr) => ("mixed", addr.to_string()),
+        _ => ("mixed", String::new()),
     };
     emit(
         events,

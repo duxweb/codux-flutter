@@ -38,7 +38,11 @@ class CoduxRemoteIroh {
 
   Future<void> connect({required Map<String, dynamic> nodeAddr}) async {
     await close();
-    final handle = _bridgeOrLoad().connect({'nodeAddr': nodeAddr});
+    final relayUrl = '${nodeAddr['relayUrl'] ?? ''}'.trim();
+    final handle = _bridgeOrLoad().connect({
+      'nodeAddr': nodeAddr,
+      if (relayUrl.isNotEmpty) 'relayUrl': relayUrl,
+    });
     if (handle == 0) {
       throw StateError('Iroh transport failed to start');
     }

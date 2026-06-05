@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-06-05
+
+### 调整
+
+- 将移动端 Iroh 传输桥接升级到 `iroh` 1.0.0-rc.1，并把配置的 relay URL 传入原生传输层。
+- 打开项目时优先进入第一个 Split 终端，使默认终端和桌面端布局保持一致。
+
+### 修复
+
+- 修复 iOS bridge 导出，确保 Swift 插件可以调用 `codux_iroh_add_node_addr`。
+- 为 iOS Iroh bridge 链接 `Network.framework`，并用当前构建身份重签 Flutter native asset 嵌入框架。
+
 ## [1.6.0] - 2026-06-05
 
 ### 新增

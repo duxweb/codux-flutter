@@ -2388,6 +2388,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     Iterable<TerminalInfo> terminals,
   ) {
     final list = terminals.toList();
+    list.sort(_compareTerminals);
+    final splits = list
+        .where((terminal) => _terminalLayoutKind(terminal) == 'split')
+        .toList();
+    if (splits.isNotEmpty) return splits.first;
+
     final rememberedId = _lastTerminalIdByProject[projectId];
     if (rememberedId != null) {
       for (final terminal in list) {
@@ -2400,6 +2406,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       }
     }
     return list.first;
+  }
+
+  String _terminalLayoutKind(TerminalInfo terminal) {
+    final value = terminal.layoutKind.trim().toLowerCase();
+    if (value == 'tab') return 'tab';
+    return 'split';
   }
 
   void _selectTerminal(TerminalInfo terminal) {

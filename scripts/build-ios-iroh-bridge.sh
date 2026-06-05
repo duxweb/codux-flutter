@@ -24,6 +24,7 @@ cat > "$HEADERS_DIR/codux_remote_iroh_bridge.h" <<'EOF'
 
 uint64_t codux_iroh_connect(const char *config_json);
 bool codux_iroh_send(uint64_t handle, const char *envelope_json);
+bool codux_iroh_add_node_addr(uint64_t handle, const char *node_addr_json);
 char *codux_iroh_poll_event(uint64_t handle);
 void codux_iroh_close(uint64_t handle);
 void codux_iroh_free_string(char *value);

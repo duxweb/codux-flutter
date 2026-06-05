@@ -70,6 +70,39 @@ void main() {
     expect(states, contains('path:path=direct;detail=192.168.1.2:12345'));
   });
 
+  test(
+    'transport forwards relay url from node address into connect config',
+    () async {
+      final bridge = _FakeIrohBridge();
+      final transport = CoduxRemoteIroh(bridge: bridge);
+
+      await transport.connect(
+        nodeAddr: {'nodeId': 'node-1', 'relayUrl': 'https://relay.example.com'},
+      );
+
+      expect(
+        bridge.connectConfigs.single['relayUrl'],
+        'https://relay.example.com',
+      );
+      expect(bridge.connectConfigs.single['nodeAddr'], {
+        'nodeId': 'node-1',
+        'relayUrl': 'https://relay.example.com',
+      });
+    },
+  );
+
+  test(
+    'transport uses default relay mode when node address has no relay url',
+    () async {
+      final bridge = _FakeIrohBridge();
+      final transport = CoduxRemoteIroh(bridge: bridge);
+
+      await transport.connect(nodeAddr: {'nodeId': 'node-1'});
+
+      expect(bridge.connectConfigs.single.containsKey('relayUrl'), isFalse);
+    },
+  );
+
   test('transport forwards resolving address counts', () async {
     final bridge = _FakeIrohBridge(
       events: [
@@ -111,6 +144,7 @@ final class _FakeIrohBridge implements CoduxRemoteIrohBridge {
           ];
 
   int connectCalls = 0;
+  final connectConfigs = <Map<String, dynamic>>[];
   final sent = <Map<String, dynamic>>[];
   final closedHandles = <int>[];
   final List<Map<String, dynamic>> _events;
@@ -118,6 +152,7 @@ final class _FakeIrohBridge implements CoduxRemoteIrohBridge {
   @override
   int connect(Map<String, dynamic> config) {
     connectCalls += 1;
+    connectConfigs.add(config);
     return 1;
   }
 
