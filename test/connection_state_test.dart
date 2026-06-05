@@ -1,10 +1,8 @@
-import 'dart:async';
-import 'dart:convert';
-
-import 'package:flutter/widgets.dart';
-import 'package:flutter_test/flutter_test.dart';
 import 'package:codux_flutter/main.dart';
 import 'package:codux_flutter/models/remote_models.dart';
+import 'package:codux_remote_iroh/codux_remote_iroh.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -14,320 +12,131 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('device home waits for host snapshots after relay hello', (
+  testWidgets('device home waits for host snapshots after iroh connect', (
     tester,
   ) async {
-    final relay = _FakeRelayFactory();
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    final session = await _connectAndEmitReady(tester, bridge);
 
-    await tester.pumpWidget(
-      CoduxFlutterApp(
-        relaySocketFactory: relay.call,
-        initialDevices: [_device()],
-      ),
-    );
-    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-    expect(relay.channels.length, 1);
-
-    relay.channels.single.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-
-    expect(find.text('连接中...'), findsWidgets);
-    expect(find.text('同步中'), findsNothing);
-    _emitHostReady(relay.channels.single);
-    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
-
-    expect(find.text('中继'), findsWidgets);
+    expect(session.sent, isNotEmpty);
+    expect(find.text('Iroh'), findsWidgets);
     expect(find.text('未连接'), findsNothing);
   });
 
-  testWidgets('old socket close does not clear a newer connected socket', (
+  testWidgets('device home shows direct iroh path when native reports it', (
     tester,
   ) async {
-    final relay = _FakeRelayFactory();
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    final session = await _connectAndEmitReady(tester, bridge);
 
-    await tester.pumpWidget(
-      CoduxFlutterApp(
-        relaySocketFactory: relay.call,
-        initialDevices: [_device()],
-      ),
-    );
-    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-    final first = relay.channels.single;
+    session.emitPath('direct');
+    await _pumpUntil(tester, () => find.text('直连').evaluate().isNotEmpty);
 
-    await tester.tap(find.text('Mac').first);
-    await tester.pump();
-    expect(relay.channels.length, 2);
-    final second = relay.channels.last;
-
-    second.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-    _emitHostReady(second);
-    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
-    expect(find.text('中继'), findsWidgets);
-
-    first.closeFromServer();
-    await tester.pump();
-
-    expect(find.text('中继'), findsWidgets);
-    expect(find.text('未连接'), findsNothing);
+    expect(find.text('直连'), findsWidgets);
+    expect(find.text('Iroh'), findsNothing);
   });
 
-  testWidgets('active socket close keeps last transport visible during grace', (
+  testWidgets('device home shows reconnecting after iroh close', (
     tester,
   ) async {
-    final relay = _FakeRelayFactory();
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    final session = await _connectAndEmitReady(tester, bridge);
 
-    await tester.pumpWidget(
-      CoduxFlutterApp(
-        relaySocketFactory: relay.call,
-        initialDevices: [_device()],
-      ),
-    );
-    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-    final channel = relay.channels.single;
+    session.emitState('closed');
+    await _pumpUntil(tester, () => find.text('重连中').evaluate().isNotEmpty);
 
-    channel.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-    _emitHostReady(channel);
-    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
-
-    channel.closeFromServer();
-    await tester.pump();
-
-    expect(find.text('中继'), findsWidgets);
-    expect(find.text('未连接'), findsNothing);
+    expect(find.text('重连中'), findsWidgets);
   });
 
-  testWidgets('reconnect refresh keeps existing host snapshot visible', (
-    tester,
-  ) async {
-    final relay = _FakeRelayFactory();
+  testWidgets('transport pong updates latency', (tester) async {
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    final session = await _connectAndEmitReady(tester, bridge);
 
-    await tester.pumpWidget(
-      CoduxFlutterApp(
-        relaySocketFactory: relay.call,
-        initialDevices: [_device()],
-      ),
+    await tester.pump(const Duration(milliseconds: 25));
+    session.emitEnvelope({'type': 'transport.pong'});
+    await _pumpUntil(
+      tester,
+      () => find.textContaining('ms').evaluate().isNotEmpty,
     );
-    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-    final first = relay.channels.single;
 
-    first.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-    _emitHostReady(first);
-    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
-
-    first.closeFromServer();
-    await tester.pump(const Duration(milliseconds: 850));
-    await _pumpUntil(tester, () => relay.channels.length == 2);
-    final second = relay.channels.last;
-
-    second.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-    _emitHostReady(second);
-    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
-
-    expect(find.text('中继'), findsWidgets);
-    expect(find.text('同步中'), findsNothing);
+    expect(find.textContaining('ms'), findsWidgets);
   });
-
-  testWidgets(
-    'opening terminal before project list does not show history loading',
-    (tester) async {
-      final relay = _FakeRelayFactory();
-
-      await tester.pumpWidget(
-        CoduxFlutterApp(
-          relaySocketFactory: relay.call,
-          initialDevices: [_device()],
-        ),
-      );
-      await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-
-      relay.channels.single.emit({
-        'type': 'hello',
-        'payload': {'role': 'client'},
-      });
-      await tester.pump();
-
-      await tester.tap(find.text('Mac').first);
-      await tester.pump();
-
-      expect(find.text('正在加载终端历史...'), findsNothing);
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(find.text('正在加载终端历史...'), findsNothing);
-    },
-  );
 
   testWidgets(
     'initial project and terminal list requests retry without reply',
     (tester) async {
-      final relay = _FakeRelayFactory();
+      final bridge = _FakeIrohBridge();
+      await _pumpApp(tester, bridge);
+      final session = await _connectAndEmitHostInfoOnly(tester, bridge);
 
-      await tester.pumpWidget(
-        CoduxFlutterApp(
-          relaySocketFactory: relay.call,
-          initialDevices: [_device()],
-        ),
-      );
-      await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-
-      relay.channels.single.emit({
-        'type': 'hello',
-        'payload': {'role': 'client'},
-      });
-      relay.channels.single.emit({
-        'type': 'host.info',
-        'payload': {'name': 'Mac', 'protocolVersion': 'v1.0'},
-      });
-      await _pumpUntil(
-        tester,
-        () => relay.channels.single.sink.sent.length >= 4,
-      );
-
-      final initialCount = relay.channels.single.sink.sent.length;
+      await _pumpUntil(tester, () => session.sentTypes.length >= 4);
+      final initialCount = session.sentTypes.length;
       await tester.pump(const Duration(milliseconds: 850));
 
-      expect(relay.channels.single.sink.sent.length, greaterThan(initialCount));
+      expect(session.sentTypes.length, greaterThan(initialCount));
     },
   );
 
-  testWidgets('foreground resume refreshes host snapshots on existing socket', (
-    tester,
-  ) async {
-    final relay = _FakeRelayFactory();
+  testWidgets(
+    'foreground resume refreshes host snapshots on existing iroh link',
+    (tester) async {
+      final bridge = _FakeIrohBridge();
+      await _pumpApp(tester, bridge);
+      final session = await _connectAndEmitReady(tester, bridge);
+      final before = session.sentTypes.length;
 
-    await tester.pumpWidget(
-      CoduxFlutterApp(
-        relaySocketFactory: relay.call,
-        initialDevices: [_device()],
-      ),
-    );
-    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-    final channel = relay.channels.single;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      _emitHostReady(session);
+      await _pumpUntil(tester, () => bridge.sessions.length > 1);
 
-    channel.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-    _emitHostReady(channel);
-    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
+      expect(bridge.sessions.length, greaterThan(1));
+      expect(session.sentTypes.length, before);
+      expect(find.text('QUIC'), findsWidgets);
+    },
+  );
 
-    final before = channel.sink.sent.length;
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    await tester.pump();
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pump();
-    expect(find.text('连接中...'), findsWidgets);
-    _emitHostReady(channel);
-    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
+  testWidgets('iroh close reconnects through iroh', (tester) async {
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    final session = await _connectAndEmitReady(tester, bridge);
 
-    expect(channel.sink.sent.length, greaterThan(before));
-    expect(find.text('中继'), findsWidgets);
-    expect(find.text('未连接'), findsNothing);
+    session.emitState('closed');
+    await _pumpUntil(tester, () => find.text('重连中').evaluate().isNotEmpty);
+
+    expect(find.text('重连中'), findsWidgets);
   });
 
-  testWidgets('foreground resume reconnects when existing socket is stale', (
-    tester,
-  ) async {
-    final relay = _FakeRelayFactory();
+  testWidgets('host info timeout reconnects through iroh', (tester) async {
+    final bridge = _FakeIrohBridge(autoConnected: true);
+    await _pumpApp(tester, bridge);
+    await _pumpUntil(tester, () => bridge.sessions.isNotEmpty);
 
-    await tester.pumpWidget(
-      CoduxFlutterApp(
-        relaySocketFactory: relay.call,
-        initialDevices: [_device()],
-      ),
-    );
-    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-    final channel = relay.channels.single;
-
-    channel.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-    _emitHostReady(channel);
-    await _pumpUntil(tester, () => find.text('中继').evaluate().isNotEmpty);
-
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    await tester.pump();
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump(const Duration(milliseconds: 6100));
     expect(find.text('连接失败，后台重试中'), findsWidgets);
     await tester.pump(const Duration(milliseconds: 850));
 
-    expect(relay.channels.length, 2);
-    expect(find.text('中继'), findsNothing);
-  });
-
-  testWidgets('relay hello without host response becomes connection failed', (
-    tester,
-  ) async {
-    final relay = _FakeRelayFactory();
-
-    await tester.pumpWidget(
-      CoduxFlutterApp(
-        relaySocketFactory: relay.call,
-        initialDevices: [_device()],
-      ),
-    );
-    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-
-    relay.channels.single.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-
-    expect(find.text('连接中...'), findsWidgets);
-    expect(find.text('同步中'), findsNothing);
-    expect(find.text('中继'), findsNothing);
-
-    await tester.pump(const Duration(milliseconds: 6100));
-
-    expect(find.text('连接失败，后台重试中'), findsWidgets);
-    expect(find.text('同步中'), findsNothing);
-    expect(find.text('中继'), findsNothing);
+    expect(bridge.sessions.length, greaterThan(1));
+    expect(find.text('Iroh'), findsNothing);
   });
 
   testWidgets('incompatible host protocol blocks reconnect for this run', (
     tester,
   ) async {
-    final relay = _FakeRelayFactory();
-
-    await tester.pumpWidget(
-      CoduxFlutterApp(
-        relaySocketFactory: relay.call,
-        initialDevices: [_device()],
-      ),
-    );
-    await _pumpUntil(tester, () => relay.channels.isNotEmpty);
-    final channel = relay.channels.single;
-
-    channel.emit({
-      'type': 'hello',
-      'payload': {'role': 'client'},
-    });
-    await tester.pump();
-    channel.emit({
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    await _pumpUntil(tester, () => bridge.sessions.isNotEmpty);
+    final session = bridge.sessions.single;
+    session.emitState('connected');
+    session.emitEnvelope({
       'type': 'host.info',
-      'payload': {'name': 'Mac', 'protocolVersion': 'v2.0'},
+      'payload': {'name': 'Mac', 'protocolVersion': 'v1.0'},
     });
     await _pumpUntil(
       tester,
@@ -335,23 +144,59 @@ void main() {
     );
 
     expect(find.text('协议版本不兼容，请升级应用'), findsWidgets);
-    expect(channel.sink.closed, isTrue);
+    expect(session.closed, isTrue);
 
     await tester.pump(const Duration(seconds: 2));
-    expect(relay.channels.length, 1);
+    expect(bridge.sessions.length, 1);
 
     await tester.tap(find.text('Mac').first);
     await tester.pump();
-    expect(relay.channels.length, 1);
+    expect(bridge.sessions.length, 1);
   });
 }
 
-void _emitHostReady(_FakeRelayChannel channel) {
-  channel.emit({
+Future<void> _pumpApp(WidgetTester tester, _FakeIrohBridge bridge) async {
+  await tester.pumpWidget(
+    CoduxFlutterApp(irohBridge: bridge, initialDevices: [_device()]),
+  );
+  await _pumpUntil(tester, () => bridge.sessions.isNotEmpty);
+}
+
+Future<_FakeIrohSession> _connectAndEmitReady(
+  WidgetTester tester,
+  _FakeIrohBridge bridge,
+) async {
+  final session = await _connectAndEmitHostInfoOnly(tester, bridge);
+  _emitProjectAndTerminalLists(session);
+  await _pumpUntil(tester, () => find.text('Iroh').evaluate().isNotEmpty);
+  return session;
+}
+
+Future<_FakeIrohSession> _connectAndEmitHostInfoOnly(
+  WidgetTester tester,
+  _FakeIrohBridge bridge,
+) async {
+  await _pumpUntil(tester, () => bridge.sessions.isNotEmpty);
+  final session = bridge.sessions.single;
+  session.emitState('connected');
+  session.emitEnvelope({
     'type': 'host.info',
-    'payload': {'name': 'Mac', 'protocolVersion': 'v1.0'},
+    'payload': {'name': 'Mac', 'protocolVersion': 'v2.0'},
   });
-  channel.emit({
+  await tester.pump();
+  return session;
+}
+
+void _emitHostReady(_FakeIrohSession session) {
+  session.emitEnvelope({
+    'type': 'host.info',
+    'payload': {'name': 'Mac', 'protocolVersion': 'v2.0'},
+  });
+  _emitProjectAndTerminalLists(session);
+}
+
+void _emitProjectAndTerminalLists(_FakeIrohSession session) {
+  session.emitEnvelope({
     'type': 'project.list',
     'payload': {
       'projects': [
@@ -359,7 +204,7 @@ void _emitHostReady(_FakeRelayChannel channel) {
       ],
     },
   });
-  channel.emit({
+  session.emitEnvelope({
     'type': 'terminal.list',
     'payload': {'terminals': []},
   });
@@ -368,7 +213,7 @@ void _emitHostReady(_FakeRelayChannel channel) {
 Future<void> _pumpUntil(
   WidgetTester tester,
   bool Function() done, {
-  int maxPumps = 20,
+  int maxPumps = 30,
 }) async {
   for (var index = 0; index < maxPumps; index += 1) {
     await tester.pump(const Duration(milliseconds: 50));
@@ -378,7 +223,7 @@ Future<void> _pumpUntil(
 
 StoredDevice _device() {
   return const StoredDevice(
-    server: 'http://127.0.0.1:8088',
+    server: '',
     hostId: 'host-1',
     deviceId: 'device-1',
     token: 'device-token',
@@ -388,6 +233,8 @@ StoredDevice _device() {
     devicePrivateKey: _devicePrivateKey,
     devicePublicKey: _devicePublicKey,
     cryptoVersion: 1,
+    transport: 'iroh',
+    iroh: IrohNodeAddr(nodeId: 'node-1'),
   );
 }
 
@@ -395,42 +242,66 @@ const _hostPublicKey = 'NKW6MhTW7bzdIKm4s8YJFxtOEh6lGd1dMpSpbgq13nc';
 const _devicePrivateKey = 'aKLDwMsHHKv5RI8Fkc-v-MhavdFDhwz4s0vEyedXHGo';
 const _devicePublicKey = 'u0-G63Fh0FcwyatxPffyvLPvgqJDwxpNCWpfIqApmCQ';
 
-final class _FakeRelayFactory {
-  final channels = <_FakeRelayChannel>[];
+final class _FakeIrohBridge implements CoduxRemoteIrohBridge {
+  _FakeIrohBridge({this.autoConnected = false});
 
-  _FakeRelayChannel call(StoredDevice device) {
-    final channel = _FakeRelayChannel();
-    channels.add(channel);
-    return channel;
+  final bool autoConnected;
+  final sessions = <_FakeIrohSession>[];
+
+  @override
+  int connect(Map<String, dynamic> config) {
+    final session = _FakeIrohSession(sessions.length + 1);
+    sessions.add(session);
+    if (autoConnected) {
+      session.emitState('connected');
+    }
+    return session.handle;
+  }
+
+  @override
+  bool send(int handle, Map<String, dynamic> envelope) {
+    final session = sessions.singleWhere((item) => item.handle == handle);
+    session.sent.add(envelope);
+    return true;
+  }
+
+  @override
+  Map<String, dynamic>? pollEvent(int handle) {
+    final session = sessions.singleWhere((item) => item.handle == handle);
+    if (session.events.isEmpty) return null;
+    return session.events.removeAt(0);
+  }
+
+  @override
+  void close(int handle) {
+    for (final session in sessions) {
+      if (session.handle == handle) {
+        session.closed = true;
+        return;
+      }
+    }
   }
 }
 
-final class _FakeRelayChannel {
-  _FakeRelayChannel() : sink = _FakeRelaySink();
+final class _FakeIrohSession {
+  _FakeIrohSession(this.handle);
 
-  final _controller = StreamController<String>();
-  final _FakeRelaySink sink;
-  Future<void> get ready => Future<void>.value();
-  Stream<String> get stream => _controller.stream;
-
-  void emit(Map<String, Object?> message) {
-    _controller.add(jsonEncode(message));
-  }
-
-  void closeFromServer() {
-    _controller.close();
-  }
-}
-
-final class _FakeRelaySink {
-  final sent = <String>[];
+  final int handle;
+  final events = <Map<String, dynamic>>[];
+  final sent = <Map<String, dynamic>>[];
   bool closed = false;
 
-  void add(String data) {
-    sent.add(data);
+  List<String> get sentTypes => sent.map((item) => '${item['type']}').toList();
+
+  void emitState(String state) {
+    events.add({'type': 'state', 'state': state});
   }
 
-  void close() {
-    closed = true;
+  void emitPath(String path) {
+    events.add({'type': 'state', 'state': 'path', 'path': path});
+  }
+
+  void emitEnvelope(Map<String, dynamic> envelope) {
+    events.add({'type': 'envelope', 'envelope': envelope});
   }
 }

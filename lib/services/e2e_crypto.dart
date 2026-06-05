@@ -8,10 +8,7 @@ import 'package:cryptography/dart.dart';
 import '../models/remote_models.dart';
 
 class DeviceKeyPair {
-  const DeviceKeyPair({
-    required this.privateKey,
-    required this.publicKey,
-  });
+  const DeviceKeyPair({required this.privateKey, required this.publicKey});
 
   final String privateKey;
   final String publicKey;

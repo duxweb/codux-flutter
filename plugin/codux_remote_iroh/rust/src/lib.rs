@@ -1,0 +1,321 @@
+use iroh::{Endpoint, NodeAddr, NodeId, RelayMode, RelayUrl, endpoint::ConnectionType};
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    collections::{HashMap, VecDeque},
+    ffi::{CStr, CString},
+    net::SocketAddr,
+    os::raw::c_char,
+    str::FromStr,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    runtime::Runtime,
+    sync::mpsc,
+    time::{Duration, timeout},
+};
+
+const ALPN: &[u8] = b"codux/remote/iroh/v1";
+
+static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().expect("create iroh runtime"));
+static CLIENTS: Lazy<Mutex<HashMap<u64, ClientHandle>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectRequest {
+    node_addr: RemoteIrohNodeAddr,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteIrohNodeAddr {
+    node_id: String,
+    #[serde(default)]
+    relay_url: Option<String>,
+    #[serde(default)]
+    direct_addresses: Vec<String>,
+}
+
+impl RemoteIrohNodeAddr {
+    fn to_node_addr(&self) -> Result<NodeAddr, String> {
+        let node_id = NodeId::from_str(self.node_id.trim()).map_err(|error| error.to_string())?;
+        let relay_url = self
+            .relay_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(RelayUrl::from_str)
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let direct_addresses = self
+            .direct_addresses
+            .iter()
+            .filter_map(|value| SocketAddr::from_str(value.trim()).ok())
+            .collect::<Vec<_>>();
+        Ok(NodeAddr::from_parts(node_id, relay_url, direct_addresses))
+    }
+}
+
+struct ClientHandle {
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+    events: std::sync::Arc<Mutex<VecDeque<String>>>,
+    closed: bool,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn codux_iroh_connect(config_json: *const c_char) -> u64 {
+    let Some(config) = read_c_string(config_json) else {
+        return 0;
+    };
+    let Ok(request) = serde_json::from_str::<ConnectRequest>(&config) else {
+        return 0;
+    };
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
+    let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let events = std::sync::Arc::new(Mutex::new(VecDeque::new()));
+    CLIENTS.lock().ok().map(|mut clients| {
+        clients.insert(
+            handle,
+            ClientHandle {
+                tx,
+                events: events.clone(),
+                closed: false,
+            },
+        )
+    });
+    RUNTIME.spawn(run_client(handle, request, rx, events));
+    handle
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn codux_iroh_send(handle: u64, envelope_json: *const c_char) -> bool {
+    let Some(message) = read_c_string(envelope_json) else {
+        return false;
+    };
+    let Some(client) = CLIENTS
+        .lock()
+        .ok()
+        .and_then(|clients| clients.get(&handle).map(|client| client.tx.clone()))
+    else {
+        return false;
+    };
+    client.send(message.into_bytes()).is_ok()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn codux_iroh_poll_event(handle: u64) -> *mut c_char {
+    let event = CLIENTS.lock().ok().and_then(|mut clients| {
+        let (event, should_remove) = {
+            let client = clients.get(&handle)?;
+            let event = client
+                .events
+                .lock()
+                .ok()
+                .and_then(|mut events| events.pop_front());
+            let should_remove = event.is_none() && client.closed;
+            (event, should_remove)
+        };
+        if should_remove {
+            clients.remove(&handle);
+        }
+        event
+    });
+    match event {
+        Some(event) => into_c_string(event),
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn codux_iroh_close(handle: u64) {
+    CLIENTS
+        .lock()
+        .ok()
+        .map(|mut clients| clients.remove(&handle));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn codux_iroh_free_string(value: *mut c_char) {
+    if value.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = CString::from_raw(value);
+    }
+}
+
+async fn run_client(
+    handle: u64,
+    request: ConnectRequest,
+    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    events: std::sync::Arc<Mutex<VecDeque<String>>>,
+) {
+    emit(&events, json!({ "type": "state", "state": "connecting" }));
+    let result = async {
+        let endpoint = Endpoint::builder()
+            .relay_mode(RelayMode::Default)
+            .discovery_n0()
+            .bind()
+            .await
+            .map_err(|error| error.to_string())?;
+        let node_addr = request.node_addr.to_node_addr()?;
+        emit(
+            &events,
+            json!({
+                "type": "state",
+                "state": "resolving",
+                "nodeId": request.node_addr.node_id,
+                "relayUrl": request.node_addr.relay_url,
+                "directAddressCount": request.node_addr.direct_addresses.len(),
+            }),
+        );
+        let connection = timeout(Duration::from_secs(8), endpoint.connect(node_addr, ALPN))
+            .await
+            .map_err(|_| "Iroh connect timed out".to_string())?
+            .map_err(|error| error.to_string())?;
+        emit(&events, json!({ "type": "state", "state": "transport" }));
+        let remote_node_id = connection
+            .remote_node_id()
+            .map_err(|error| error.to_string())?;
+        let endpoint_for_path = endpoint.clone();
+        let events_for_path = events.clone();
+        let conn_type_task = tokio::spawn(async move {
+            if let Ok(mut watcher) = endpoint_for_path.conn_type(remote_node_id) {
+                if let Ok(conn_type) = watcher.get() {
+                    emit_connection_type(&events_for_path, &conn_type);
+                }
+                while let Ok(conn_type) = watcher.updated().await {
+                    emit_connection_type(&events_for_path, &conn_type);
+                }
+            }
+        });
+        emit(&events, json!({ "type": "state", "state": "connected" }));
+        loop {
+            tokio::select! {
+                inbound = connection.accept_bi() => {
+                    let Ok((mut send, mut recv)) = inbound else {
+                        break;
+                    };
+                    let data = read_frame(&mut recv).await?;
+                    if let Ok(envelope) = serde_json::from_slice::<Value>(&data) {
+                        emit(&events, json!({ "type": "envelope", "envelope": envelope }));
+                    }
+                    let _ = write_frame(&mut send, br#"{"ok":true}"#).await;
+                    let _ = send.finish();
+                }
+                outbound = rx.recv() => {
+                    let Some(data) = outbound else {
+                        break;
+                    };
+                    send_frame(&connection, &data).await?;
+                }
+            }
+        }
+        conn_type_task.abort();
+        endpoint.close().await;
+        Ok::<(), String>(())
+    }
+    .await;
+    match result {
+        Ok(()) => emit(&events, json!({ "type": "state", "state": "closed" })),
+        Err(error) => emit(
+            &events,
+            json!({ "type": "state", "state": "failed", "error": error }),
+        ),
+    }
+    if let Ok(mut clients) = CLIENTS.lock() {
+        if let Some(client) = clients.get_mut(&handle) {
+            client.closed = true;
+        }
+    }
+}
+
+async fn send_frame(connection: &iroh::endpoint::Connection, data: &[u8]) -> Result<(), String> {
+    let (mut send, _) = connection
+        .open_bi()
+        .await
+        .map_err(|error| error.to_string())?;
+    write_frame(&mut send, data).await?;
+    send.finish().map_err(|error| error.to_string())
+}
+
+async fn write_frame<W>(writer: &mut W, data: &[u8]) -> Result<(), String>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    let len = u32::try_from(data.len()).map_err(|_| "Remote message is too large".to_string())?;
+    writer
+        .write_all(&len.to_be_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    writer
+        .write_all(data)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn read_frame<R>(reader: &mut R) -> Result<Vec<u8>, String>
+where
+    R: AsyncReadExt + Unpin,
+{
+    let mut header = [0_u8; 4];
+    reader
+        .read_exact(&mut header)
+        .await
+        .map_err(|error| error.to_string())?;
+    let len = u32::from_be_bytes(header) as usize;
+    if len > 8 * 1024 * 1024 {
+        return Err("Remote message is too large".to_string());
+    }
+    let mut data = vec![0_u8; len];
+    reader
+        .read_exact(&mut data)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(data)
+}
+
+fn emit(events: &Mutex<VecDeque<String>>, event: Value) {
+    if let Ok(mut events) = events.lock() {
+        events.push_back(event.to_string());
+        while events.len() > 256 {
+            events.pop_front();
+        }
+    }
+}
+
+fn emit_connection_type(events: &Mutex<VecDeque<String>>, conn_type: &ConnectionType) {
+    let (path, detail) = match conn_type {
+        ConnectionType::Direct(addr) => ("direct", addr.to_string()),
+        ConnectionType::Relay(url) => ("relay", url.to_string()),
+        ConnectionType::Mixed(addr, url) => ("mixed", format!("{addr} via {url}")),
+        ConnectionType::None => ("none", String::new()),
+    };
+    emit(
+        events,
+        json!({
+            "type": "state",
+            "state": "path",
+            "path": path,
+            "detail": detail,
+        }),
+    );
+}
+
+fn read_c_string(value: *const c_char) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(value).to_str().ok().map(str::to_string) }
+}
+
+fn into_c_string(value: String) -> *mut c_char {
+    CString::new(value)
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
+}

@@ -4,6 +4,27 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-06-05
+
+### Added
+
+- Added the native Iroh remote transport bridge for mobile pairing, reconnect, terminal traffic, and upload delivery.
+- Added the terminal switcher screen for split terminals, tab terminals, and worktree switching.
+- Added worktree create, merge, delete, and refresh actions from the mobile terminal switcher.
+
+### Changed
+
+- Replaced the legacy relay/WebRTC terminal transport with the unified Iroh QUIC protocol path.
+- Standardized pairing and reconnect around encrypted Dart protocol envelopes, keeping native transport code limited to connection and frame delivery.
+- Restricted terminal file and image uploads to direct Iroh connections so large transfers never run over relay paths.
+- Updated the iOS TestFlight workflow to build the Iroh bridge before archiving.
+
+### Fixed
+
+- Fixed mobile reconnect after desktop restarts by using Iroh n0 discovery for node address resolution.
+- Fixed project switching, terminal history recovery, connection status, latency display, and host responsiveness handling on the new transport.
+- Fixed iOS navigation transitions, edge-swipe back handling, terminal padding, toolbar layout, pairing overflow copy, and upload copy.
+
 ## [1.5.0] - 2026-06-04
 
 ### Changed

@@ -34,6 +34,12 @@
 	<string>Codux uses the photo library to upload selected images to the terminal.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Codux uses location permission only when required by iOS to support local network and nearby connectivity features. Codux does not collect or store your location data.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Codux uses the local network to connect directly to your paired desktop device.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dartobservatory._tcp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

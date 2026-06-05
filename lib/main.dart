@@ -1,16 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/cupertino.dart' as cupertino;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:codux_remote_iroh/codux_remote_iroh.dart';
 import 'package:codux_native_terminal/codux_native_terminal.dart';
 import 'i18n.dart';
 import 'models/remote_models.dart';
@@ -19,9 +20,7 @@ import 'screens/settings_screen.dart';
 import 'services/e2e_crypto.dart';
 import 'services/log_service.dart';
 import 'services/local_voice_recognition_service.dart';
-import 'services/relay_service.dart';
-import 'services/p2p_health_monitor.dart';
-import 'services/p2p_terminal_transport.dart';
+import 'services/remote_protocol_service.dart';
 import 'services/storage_service.dart';
 import 'services/terminal_buffer_retry.dart';
 import 'services/terminal_input_batcher.dart';
@@ -40,12 +39,11 @@ import 'widgets/project_tab_bar.dart';
 import 'widgets/remote_file_picker.dart';
 import 'widgets/voice_input_overlay.dart';
 import 'widgets/terminal_header.dart';
+import 'widgets/terminal_switcher_screen.dart';
 import 'widgets/terminal_transition_mask.dart';
 import 'widgets/toolbar.dart';
 
-typedef RelaySocketFactory = dynamic Function(StoredDevice device);
-
-const String _remoteProtocolVersion = 'v1.0';
+const String _remoteProtocolVersion = 'v2.0';
 
 enum _TerminalUploadSource { file, image }
 
@@ -63,13 +61,9 @@ void main() {
 }
 
 class CoduxFlutterApp extends StatefulWidget {
-  const CoduxFlutterApp({
-    super.key,
-    this.relaySocketFactory,
-    this.initialDevices,
-  });
+  const CoduxFlutterApp({super.key, this.irohBridge, this.initialDevices});
 
-  final RelaySocketFactory? relaySocketFactory;
+  final CoduxRemoteIrohBridge? irohBridge;
   final List<StoredDevice>? initialDevices;
 
   @override
@@ -102,7 +96,7 @@ class _CoduxFlutterAppState extends State<CoduxFlutterApp> {
         child: CoduxHomePage(
           onChangeAccent: _setAccent,
           onChangeLocale: _setLocale,
-          relaySocketFactory: widget.relaySocketFactory,
+          irohBridge: widget.irohBridge,
           initialDevices: widget.initialDevices,
         ),
       ),
@@ -115,13 +109,13 @@ class CoduxHomePage extends StatefulWidget {
     super.key,
     required this.onChangeAccent,
     required this.onChangeLocale,
-    this.relaySocketFactory,
+    this.irohBridge,
     this.initialDevices,
   });
 
   final ValueChanged<AccentOption> onChangeAccent;
   final ValueChanged<LocaleOption> onChangeLocale;
-  final RelaySocketFactory? relaySocketFactory;
+  final CoduxRemoteIrohBridge? irohBridge;
   final List<StoredDevice>? initialDevices;
 
   @override
@@ -138,12 +132,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   late final AnimationController _maskController;
   late final Animation<double> _maskOpacity;
+  late final AnimationController _edgeBackController;
   late final TerminalBufferRetryCoordinator _terminalBufferRetry;
   late final TerminalInputBatcher _terminalInputBatcher;
   late final TerminalUploadSender _terminalUploadSender;
-  late final P2PTerminalTransport _p2pTransport;
-  late final P2PHealthMonitor _p2pHealth;
+  late final CoduxRemoteIroh _irohTransport;
   late final LocalVoiceRecognitionService _voiceService;
+  Completer<StoredDevice>? _irohPairingCompleter;
+  String? _irohPairingDeviceName;
+  bool _irohPairingRequestSent = false;
   Completer<void>? _terminalUploadCompletion;
   CoduxNativeTerminalController? _nativeTerminalController;
   String _pendingTerminalOutput = '';
@@ -164,6 +161,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   List<StoredDevice> _devices = [];
   List<ProjectInfo> _projects = [];
   List<TerminalInfo> _terminals = [];
+  List<RemoteWorktreeInfo> _worktrees = [];
+  List<String> _worktreeBaseBranches = [];
   StoredDevice? _activeDevice;
   MobileSettings _settings = const MobileSettings(localName: '');
   String _detectedDeviceName = 'Codux Mobile';
@@ -171,6 +170,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   String? _selectedProjectId;
   String? _sessionId;
   String? _creatingTerminalProjectId;
+  String? _defaultWorktreeBaseBranch;
   bool _showSettings = false;
   bool _showScanner = false;
   PairingPayload? _pendingPairing;
@@ -178,6 +178,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   bool _pairingCancelled = false;
   String? _pairingError;
   bool _showTerminal = false;
+  bool _showTerminalSwitcher = false;
   bool _terminalReady = false;
   bool _terminalBufferLoading = false;
   bool _terminalUploadLoading = false;
@@ -186,7 +187,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   bool _projectListLoaded = false;
   bool _backgroundConnect = false;
   bool _shouldReconnect = true;
-  bool _relayReady = false;
+  bool _transportReady = false;
   bool _remoteProtocolReady = false;
   bool _hostResponsive = false;
   bool _appSuspended = false;
@@ -212,6 +213,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   String? _toastMessage;
   String? _blockingLoadingMessage;
   bool _projectFilesLoading = false;
+  bool _worktreeListLoading = false;
   bool _fileEditorLoading = false;
   bool _fileEditorSaving = false;
   bool _fileEditorEditing = false;
@@ -219,13 +221,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   int _reconnectAttempt = 0;
   bool _appInForeground = true;
 
-  WebSocketSinkLike? _socket;
-  int _socketGeneration = 0;
+  bool _irohReady = false;
+  int _transportGeneration = 0;
   int _sendSeq = 0;
   int _receiveSeq = 0;
   Future<void> _sendChain = Future<void>.value();
   Future<void> _receiveChain = Future<void>.value();
-  StreamSubscription? _socketSubscription;
   Timer? _reconnectTimer;
   Timer? _healthTimer;
   Timer? _toastTimer;
@@ -234,17 +235,24 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _terminalListRetryTimer;
   Timer? _hostResponseTimer;
   Timer? _latencyProbeTimer;
+  Timer? _pingTimeoutTimer;
   int _projectListRetryAttempt = 0;
   int _terminalListRetryAttempt = 0;
-  String _lastTransportState = 'relay';
+  double? _edgeBackDragStartX;
+  double _edgeBackDragDeltaX = 0;
+  double _edgeBackDragDeltaY = 0;
+  String _lastTransportState = 'iroh';
+  String _irohConnectionPath = 'unknown';
   DateTime? _lastConnectedAt;
   DateTime? _connectionGraceUntil;
-  DateTime? _hostInfoProbeSentAt;
+  DateTime? _pingSentAt;
+  String? _pendingPingId;
+  String? _selectedWorktreeId;
+  int _pingSeq = 0;
   int? _latencyMs;
   Timer? _connectionGraceTimer;
 
-  bool get _isConnected => _socket != null && _relayReady;
-  bool get _isP2PHealthy => _p2pTransport.isOpen && _p2pHealth.stable;
+  bool get _isConnected => _irohReady && _transportReady;
   bool get _isHostReady =>
       _isConnected &&
       _hostResponsive &&
@@ -259,15 +267,41 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         DateTime.now().isBefore(graceUntil);
   }
 
-  bool get _isDeviceListConnected => _isHostReady || _isRecoveringConnection;
+  bool get _isDeviceListConnected => _isHostReady;
 
   String _t(String key, {Map<String, String>? params}) =>
       AppPreferences.of(context).t(key, params: params);
 
   String get _connectionStatusText {
     if (!_isConnected) {
-      if (_isRecoveringConnection) return _lastTransportStatusText;
-      return _status.isEmpty ? _t('app.notConnected') : _status;
+      if (_isRecoveringConnection) return _t('app.reconnecting');
+      if (_activeDevice != null && _backgroundConnect) {
+        return _t('app.connecting');
+      }
+      if (_status.isEmpty || _status == _t('app.connected')) {
+        return _t('app.notConnected');
+      }
+      return _status;
+    }
+    if (!_hostResponsive) {
+      return _t('app.connecting');
+    }
+    if (!_projectListLoaded || !_terminalListLoaded) {
+      return _t('app.syncing');
+    }
+    return _terminalTransportStatusText;
+  }
+
+  String get _deviceListStatusText {
+    if (!_isConnected) {
+      if (_isRecoveringConnection) return _t('app.reconnectingShort');
+      if (_activeDevice != null && _backgroundConnect) {
+        return _t('app.connecting');
+      }
+      if (_status.isEmpty || _status == _t('app.connected')) {
+        return _t('app.notConnected');
+      }
+      return _status;
     }
     if (!_hostResponsive) {
       return _t('app.connecting');
@@ -279,17 +313,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   String get _terminalTransportStatusText {
-    if (_isP2PHealthy) {
-      return _t('transport.p2p');
-    }
-    return _t('transport.relay');
+    return _irohConnectionPathLabel(_irohConnectionPath);
   }
 
-  String get _lastTransportStatusText {
-    if (_lastTransportState == 'p2p') {
-      return _t('transport.p2p');
-    }
-    return _t('transport.relay');
+  String _irohConnectionPathLabel(String path) {
+    return switch (path) {
+      'direct' => _t('connection.direct'),
+      'relay' => _t('connection.relay'),
+      _ => 'Iroh',
+    };
   }
 
   void _clearConnectionGrace() {
@@ -306,7 +338,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _connectionGraceTimer?.cancel();
     _connectionGraceUntil = DateTime.now().add(duration);
     CoduxLog.info(
-      '[codux-flutter-ws] grace reason=$reason until=${_connectionGraceUntil!.toIso8601String()} transport=$_lastTransportState lastConnectedAt=${_lastConnectedAt?.toIso8601String() ?? 'null'}',
+      '[codux-flutter-iroh] grace reason=$reason until=${_connectionGraceUntil!.toIso8601String()} transport=$_lastTransportState lastConnectedAt=${_lastConnectedAt?.toIso8601String() ?? 'null'}',
     );
     _connectionGraceTimer = Timer(duration, () {
       if (!mounted || _disposing) return;
@@ -315,7 +347,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       setState(() {
         _connectionGraceUntil = null;
       });
-      CoduxLog.info('[codux-flutter-ws] grace expired reason=$reason');
+      CoduxLog.info('[codux-flutter-iroh] grace expired reason=$reason');
     });
   }
 
@@ -335,16 +367,20 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     Duration duration = const Duration(seconds: 6),
   }) {
     final device = _activeDevice;
-    final socket = _socket;
-    if (!_relayReady || socket == null || device == null) return;
+    final generation = _transportGeneration;
+    if (!_transportReady || device == null) return;
     _cancelHostResponseProbe();
     CoduxLog.info(
-      '[codux-flutter-ws] host probe start reason=$reason timeoutMs=${duration.inMilliseconds}',
+      '[codux-flutter-remote] host probe start reason=$reason timeoutMs=${duration.inMilliseconds}',
     );
     _hostResponseTimer = Timer(duration, () {
       if (!mounted || _disposing || !_appInForeground) return;
-      if (_socket != socket || !_relayReady || _hostResponsive) return;
-      _failHostConnection(device, socket, 'host_response_timeout:$reason');
+      if (_transportGeneration != generation ||
+          !_transportReady ||
+          _hostResponsive) {
+        return;
+      }
+      _failHostConnection(device, 'host_response_timeout:$reason');
     });
   }
 
@@ -356,18 +392,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _markRemoteProtocolReady({bool force = false}) {
     if (_remoteProtocolReady && !force) return;
     _remoteProtocolReady = true;
-    _sendInitialRelayRequests(force: force);
+    _sendInitialTransportRequests(force: force);
   }
 
-  void _failRemoteProtocol(
-    StoredDevice target,
-    WebSocketSinkLike socket,
-    Object? payload,
-  ) {
-    if (_socket != socket) return;
+  void _failRemoteProtocol(StoredDevice target, Object? payload) {
     final version = payload is Map ? '${payload['protocolVersion'] ?? ''}' : '';
     CoduxLog.warn(
-      '[codux-flutter-ws] incompatible protocol expected=$_remoteProtocolVersion received=$version host=${target.hostId} device=${target.deviceId}',
+      '[codux-flutter-iroh] incompatible protocol expected=$_remoteProtocolVersion received=$version host=${target.hostId} device=${target.deviceId}',
     );
     _shouldReconnect = false;
     final shouldPrompt = _protocolBlockedHostIds.add(target.hostId);
@@ -376,16 +407,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _cancelHostResponseProbe();
     _clearConnectionGrace();
     _clearLatencyProbe();
-    _socketSubscription?.cancel();
-    _socketSubscription = null;
-    _socket = null;
-    socket.close();
-    unawaited(_p2pTransport.close());
+    _irohReady = false;
+    unawaited(_irohTransport.close());
     _terminalInputBatcher.reset();
     _clearPendingTerminalInputs();
     final message = _t('connection.upgradeRequired');
     setState(() {
-      _relayReady = false;
+      _transportReady = false;
       _remoteProtocolReady = false;
       _hostResponsive = false;
       _backgroundConnect = false;
@@ -394,13 +422,18 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _projects = [];
       _projectListLoaded = false;
       _terminals = [];
+      _worktrees = [];
+      _worktreeBaseBranches = [];
       _terminalListLoaded = false;
       _projectListRetryTimer?.cancel();
       _terminalListRetryTimer?.cancel();
       _projectListRetryAttempt = 0;
       _terminalListRetryAttempt = 0;
       _selectedProjectId = null;
+      _defaultWorktreeBaseBranch = null;
+      _selectedWorktreeId = null;
       _sessionId = null;
+      _showTerminalSwitcher = false;
       _status = message;
       _terminalBufferRetry.reset();
       _terminalBufferLoading = false;
@@ -414,88 +447,131 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     final wasResponsive = _hostResponsive;
     _hostResponsive = true;
     _cancelHostResponseProbe();
-    _markTransportConnected(
-      transport ?? (_p2pTransport.isOpen ? 'p2p' : 'relay'),
-    );
+    _markTransportConnected(transport ?? 'iroh');
     if (!wasResponsive) {
-      CoduxLog.info('[codux-flutter-ws] host responsive source=$source');
+      CoduxLog.info('[codux-flutter-iroh] host responsive source=$source');
     }
   }
 
   void _clearLatencyProbe() {
     _latencyProbeTimer?.cancel();
     _latencyProbeTimer = null;
-    _hostInfoProbeSentAt = null;
+    _pingTimeoutTimer?.cancel();
+    _pingTimeoutTimer = null;
+    _pingSentAt = null;
+    _pendingPingId = null;
     _latencyMs = null;
   }
 
-  void _recordHostInfoLatency() {
-    final sentAt = _hostInfoProbeSentAt;
+  void _recordTransportPong(Object? payload) {
+    final sentAt = _pingSentAt;
     if (sentAt == null) return;
+    if (payload is Map && _pendingPingId != null) {
+      final id = payload['id']?.toString();
+      if (id != null && id != _pendingPingId) return;
+    }
     final nextLatency = DateTime.now().difference(sentAt).inMilliseconds;
-    _hostInfoProbeSentAt = null;
-    if (_isP2PHealthy) return;
+    _pingTimeoutTimer?.cancel();
+    _pingTimeoutTimer = null;
+    _pingSentAt = null;
+    _pendingPingId = null;
     if (nextLatency <= 0 || nextLatency > 60000) return;
     if (_latencyMs == nextLatency) return;
     setState(() => _latencyMs = nextLatency);
   }
 
-  void _sendHostInfoProbe() {
-    if (!_relayReady || _socket == null) return;
-    _hostInfoProbeSentAt = DateTime.now();
+  void _sendHostInfoRequest() {
+    if (!_transportReady || !_irohReady) return;
     _send(const RelayEnvelope(type: 'host.info'));
+  }
+
+  void _sendTransportPing() {
+    final target = _activeDevice;
+    if (!_transportReady || !_irohReady || target == null) return;
+    if (_pendingPingId != null) return;
+    final pingId = '${DateTime.now().microsecondsSinceEpoch}-${++_pingSeq}';
+    _pendingPingId = pingId;
+    _pingSentAt = DateTime.now();
+    final sent = _send(
+      RelayEnvelope(type: 'transport.ping', payload: {'id': pingId}),
+    );
+    if (!sent) {
+      _pendingPingId = null;
+      _pingSentAt = null;
+      return;
+    }
+    _pingTimeoutTimer?.cancel();
+    _pingTimeoutTimer = Timer(const Duration(seconds: 6), () {
+      if (!mounted || _disposing || !_appInForeground) return;
+      if (_pendingPingId != pingId) return;
+      _pendingPingId = null;
+      _pingSentAt = null;
+      _failHostConnection(target, 'transport_ping_timeout');
+    });
   }
 
   void _startLatencyProbe() {
     if (_latencyProbeTimer != null) return;
+    _sendTransportPing();
     _latencyProbeTimer = Timer.periodic(
       const Duration(seconds: 10),
-      (_) => _sendHostInfoProbe(),
+      (_) => _sendTransportPing(),
     );
   }
 
-  void _failHostConnection(
-    StoredDevice target,
-    WebSocketSinkLike socket,
-    String reason,
-  ) {
-    if (_socket != socket) return;
+  void _failHostConnection(StoredDevice target, String reason) {
     CoduxLog.warn(
-      '[codux-flutter-ws] host unavailable reason=$reason host=${target.hostId} device=${target.deviceId}',
+      '[codux-flutter-remote] host unavailable reason=$reason host=${target.hostId} device=${target.deviceId}',
     );
-    _cancelHostResponseProbe();
-    _clearConnectionGrace();
-    _lastConnectedAt = null;
-    _healthTimer?.cancel();
-    _healthTimer = null;
-    _clearLatencyProbe();
-    _socketSubscription?.cancel();
-    _socketSubscription = null;
-    _socket = null;
-    socket.close();
-    unawaited(_p2pTransport.close());
-    _terminalInputBatcher.reset();
-    _clearPendingTerminalInputs();
-    setState(() {
-      _relayReady = false;
-      _remoteProtocolReady = false;
-      _hostResponsive = false;
-      _backgroundConnect = false;
-      _status = _t('connection.failedRetry');
-      _terminalBufferRetry.reset();
-      _terminalBufferLoading = false;
-    });
+    _disconnectTransport(
+      status: _t('connection.failedRetry'),
+      closeTerminal: false,
+      notifyHost: false,
+    );
     if (_appSuspended || !_appInForeground) {
       CoduxLog.info(
-        '[codux-flutter-ws] reconnect deferred reason=$reason appSuspended=$_appSuspended',
+        '[codux-flutter-iroh] reconnect deferred reason=$reason appSuspended=$_appSuspended',
       );
       return;
     }
     _scheduleReconnect(target);
   }
 
+  void _disconnectTransport({
+    required String status,
+    bool closeTerminal = false,
+    bool notifyHost = true,
+  }) {
+    if (notifyHost && _irohReady) {
+      _send(const RelayEnvelope(type: 'device.disconnected'));
+    }
+    _cancelHostResponseProbe();
+    _clearConnectionGrace();
+    _lastConnectedAt = null;
+    _healthTimer?.cancel();
+    _healthTimer = null;
+    _clearLatencyProbe();
+    _irohReady = false;
+    unawaited(_irohTransport.close());
+    _terminalInputBatcher.reset();
+    _clearPendingTerminalInputs();
+    setState(() {
+      _transportReady = false;
+      _remoteProtocolReady = false;
+      _hostResponsive = false;
+      _backgroundConnect = false;
+      if (closeTerminal) {
+        _showTerminal = false;
+        _workspaceMode = 'terminal';
+      }
+      _status = status;
+      _terminalBufferRetry.reset();
+      _terminalBufferLoading = false;
+    });
+  }
+
   void _recoverForegroundState() {
-    if (!_relayReady) {
+    if (!_transportReady) {
       final device = _activeDevice;
       if (device != null) _connect(device, true);
       return;
@@ -505,7 +581,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _requestProjectList(resetRetry: true);
     _requestTerminalList(resetRetry: true);
     _send(const RelayEnvelope(type: 'host.info'));
-    _ensureP2PStarted();
     _restoreVisibleTerminalFromCache();
     _flushPendingTerminalResize(force: true);
     _requestBufferIfReady(force: true);
@@ -556,6 +631,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       parent: _maskController,
       curve: Curves.easeOutCubic,
     );
+    _edgeBackController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
     _terminalBufferRetry = TerminalBufferRetryCoordinator(
       onRetryExhausted: (sessionId) {
         if (!mounted || _sessionId != sessionId) return;
@@ -569,52 +648,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       send: _sendTerminalUploadEnvelopeReliable,
       afterChunkAck: () => Future<void>.delayed(Duration.zero),
     );
-    _p2pTransport = P2PTerminalTransport(
-      sendSignal: _send,
-      onEnvelope: _handleP2PEnvelope,
-      onState: (state) {
-        CoduxLog.info('[codux-flutter-p2p] state=$state');
-        if (!mounted || _disposing) return;
-        setState(() {
-          if (state == 'connected') {
-            _hostResponsive = true;
-          } else if ((state == 'failed' || state == 'disconnected') &&
-              _relayReady) {
-            _lastTransportState = 'relay';
-          }
-        });
-        if (state == 'connected') {
-          _p2pHealth.start();
-          _flushPendingTerminalResize(force: true);
-          _requestBufferIfReady();
-          _terminalInputBatcher.flush();
-        } else {
-          _p2pHealth.reset(notify: true);
-        }
-        if (state == 'failed') {
-          unawaited(_p2pTransport.close());
-          if (_relayReady) {
-            Timer(const Duration(seconds: 2), () {
-              if (!mounted || _disposing || !_relayReady) return;
-              _ensureP2PStarted();
-            });
-          }
-        }
-      },
-    );
-    _p2pTransport.setPreferDomesticStun(
-      _preferDomesticStunForLocale(_settings.localeId),
-    );
-    _p2pHealth = P2PHealthMonitor(
-      isOpen: () => _p2pTransport.isOpen,
-      sendPing: (id) => _p2pTransport.sendEnvelope(
-        RelayEnvelope(type: 'p2p.ping', payload: {'id': id}),
-      ),
-      onStableChanged: (_) {
-        if (!mounted || _disposing) return;
-        setState(() {});
-      },
-    );
+    _irohTransport = CoduxRemoteIroh(bridge: widget.irohBridge)
+      ..onState = _handleIrohState
+      ..onEnvelope = (envelope) {
+        _handleIrohEnvelope(RelayEnvelope.fromJson(envelope));
+      };
     _voiceService = LocalVoiceRecognitionService(
       onLog: (message) => CoduxLog.info('[codux-flutter-voice] $message'),
     );
@@ -630,7 +668,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _healthTimer?.cancel();
     _connectionGraceTimer?.cancel();
     _latencyProbeTimer?.cancel();
-    _p2pHealth.dispose();
+    _pingTimeoutTimer?.cancel();
     _toastTimer?.cancel();
     _filePickerTimeoutTimer?.cancel();
     _projectListRetryTimer?.cancel();
@@ -645,15 +683,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _terminalUploadSender.dispose();
     _clearPendingTerminalInputs();
     _voiceService.dispose();
-    unawaited(_p2pTransport.close());
-    _socketSubscription?.cancel();
-    _socket?.close();
+    unawaited(_irohTransport.close());
     _nativeTerminalController?.dispose();
     _settingsNameController.dispose();
     _fileEditorController.dispose();
     _projectNameController.dispose();
     _projectPathController.dispose();
     _maskController.dispose();
+    _edgeBackController.dispose();
     super.dispose();
   }
 
@@ -665,9 +702,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _appSuspended = false;
       final device = _activeDevice;
       if (device == null) return;
-      if (_socket != null) {
+      if (_irohReady) {
         CoduxLog.info(
-          '[codux-flutter-lifecycle] resume keep existing socket host=${device.hostId} device=${device.deviceId}',
+          '[codux-flutter-lifecycle] resume keep existing transport host=${device.hostId} device=${device.deviceId}',
         );
         _recoverForegroundState();
         return;
@@ -690,6 +727,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         state == AppLifecycleState.hidden) {
       _appInForeground = false;
       _appSuspended = true;
+      _disconnectTransport(
+        status: _t('app.disconnected'),
+        closeTerminal: false,
+      );
       if (mounted) {
         setState(() {
           _terminalBufferRetry.reset();
@@ -722,9 +763,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         loadedSettings ?? MobileSettings(localName: _detectedDeviceName);
     widget.onChangeAccent(AccentChoices.byId(next.accentId));
     widget.onChangeLocale(LocaleChoices.byId(next.localeId));
-    _p2pTransport.setPreferDomesticStun(
-      _preferDomesticStunForLocale(next.localeId),
-    );
     setState(() {
       _settings = next;
       _settingsNameController.text = next.localName;
@@ -743,7 +781,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       final cached = await _storage.loadCachedProjects(device);
       if (!mounted ||
           _activeDevice?.hostId != device.hostId ||
-          _activeDevice?.server != device.server ||
           cached.isEmpty ||
           _projects.isNotEmpty) {
         return;
@@ -855,14 +892,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _status = _t('pair.submitting');
     });
     try {
-      await claimPairing(payload, name);
-      if (_pairingCancelled) throw const PairingCancelledException();
-      setState(() => _status = _t('pair.waiting'));
-      final confirmed = await waitPairingConfirmed(
-        payload,
-        name,
-        isCancelled: () => _pairingCancelled,
-      );
+      final confirmed = await _confirmIrohPairing(payload, name);
       if (!mounted) return;
       final hostName = confirmed.hostName?.trim().isNotEmpty == true
           ? confirmed.hostName!.trim()
@@ -905,6 +935,45 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
+  Future<StoredDevice> _confirmIrohPairing(
+    PairingPayload payload,
+    String name,
+  ) async {
+    final nodeAddr = payload.iroh;
+    if (nodeAddr == null) {
+      throw Exception(_t('remote.qrMissingFields'));
+    }
+    final completer = Completer<StoredDevice>();
+    _irohPairingCompleter = completer;
+    _irohPairingDeviceName = name;
+    _irohPairingRequestSent = false;
+    setState(() => _status = _t('pair.waiting'));
+    await _irohTransport.connect(nodeAddr: nodeAddr.toJson());
+    try {
+      return await Future.any<StoredDevice>([
+        completer.future,
+        _waitIrohPairingCancelled(),
+        Future<StoredDevice>.delayed(
+          const Duration(seconds: 90),
+          () => throw Exception(_t('remote.waitTimeout')),
+        ),
+      ]);
+    } finally {
+      _irohPairingCompleter = null;
+      _irohPairingDeviceName = null;
+      _irohPairingRequestSent = false;
+      await _irohTransport.close();
+      _irohReady = false;
+    }
+  }
+
+  Future<StoredDevice> _waitIrohPairingCancelled() async {
+    while (!_pairingCancelled) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    throw const PairingCancelledException();
+  }
+
   Future<void> _saveSettings() async {
     final next = _settings.copyWith(
       localName: _settingsNameController.text.trim().isEmpty
@@ -914,8 +983,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     await _storage.saveSettings(next);
     setState(() {
       _settings = next;
-      _showSettings = false;
       _status = _t('settings.saved');
+    });
+    _popCupertinoPage(() {
+      _showSettings = false;
     });
     _send(
       RelayEnvelope(type: 'device.info', payload: {'name': next.localName}),
@@ -936,29 +1007,28 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
     _shouldReconnect = true;
     _backgroundConnect = background;
-    final generation = ++_socketGeneration;
+    final generation = ++_transportGeneration;
     CoduxLog.info(
-      '[codux-flutter-ws] connect start gen=$generation background=$background host=${target.hostId} device=${target.deviceId}',
+      '[codux-flutter-iroh] connect start gen=$generation background=$background host=${target.hostId} device=${target.deviceId}',
     );
     _cancelHostResponseProbe();
     _reconnectTimer?.cancel();
     _healthTimer?.cancel();
     _clearLatencyProbe();
-    _socketSubscription?.cancel();
-    _socket?.close();
+    unawaited(_irohTransport.close());
+    _irohReady = false;
     _sendSeq = DateTime.now().microsecondsSinceEpoch;
     _receiveSeq = 0;
     _sendChain = Future<void>.value();
     _receiveChain = Future<void>.value();
     RemoteE2ECrypto.clearCache();
-    unawaited(_p2pTransport.close());
     if (background && _lastConnectedAt != null) {
       _startConnectionGrace(reason: 'background_connect');
     }
     if (!background) _clearTerminal();
     if (!background) _terminalInputBatcher.reset();
     setState(() {
-      _relayReady = false;
+      _transportReady = false;
       _remoteProtocolReady = false;
       _hostResponsive = false;
       if (!background) {
@@ -966,109 +1036,54 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         _projects = [];
         _projectListLoaded = false;
         _terminals = [];
+        _worktrees = [];
+        _worktreeBaseBranches = [];
         _terminalListLoaded = false;
         _projectListRetryTimer?.cancel();
         _terminalListRetryTimer?.cancel();
         _projectListRetryAttempt = 0;
         _terminalListRetryAttempt = 0;
         _selectedProjectId = null;
+        _defaultWorktreeBaseBranch = null;
+        _selectedWorktreeId = null;
         _sessionId = null;
+        _showTerminalSwitcher = false;
         _terminalBufferRetry.reset();
         _terminalBufferLoading = false;
       }
       _activeDevice = target;
     });
     unawaited(_restoreCachedProjects(target));
-    try {
-      final channel = (widget.relaySocketFactory ?? createRelaySocket)(target);
-      final socket = _WebSocketSink(channel);
-      _socket = socket;
-      _socketSubscription = channel.stream.listen(
-        (event) => _handleSocketMessage(event, target, socket),
-        onDone: () => _handleSocketClosed(target, socket, 'stream_done'),
-        onError: (error) {
-          if (_socket != socket) return;
-          CoduxLog.warn(
-            '[codux-flutter-ws] stream error gen=$generation error=$error',
-          );
-          if (!_backgroundConnect) {
-            setState(() => _status = _t('app.connectError'));
-          }
-          _handleSocketClosed(target, socket, 'stream_error');
-        },
+    final nodeAddr = stableIrohNodeAddr(target.iroh);
+    if (target.transport != 'iroh' || nodeAddr == null) {
+      setState(() => _status = _t('pair.repairRequired'));
+      return;
+    }
+    CoduxLog.info(
+      '[codux-flutter-iroh] dial nodeId=${nodeAddr.nodeId} relay=${nodeAddr.relayUrl ?? ''} direct=${nodeAddr.directAddresses.length}',
+    );
+    _irohTransport.connect(nodeAddr: nodeAddr.toJson()).catchError((
+      Object error,
+    ) {
+      CoduxLog.warn(
+        '[codux-flutter-iroh] connect failed gen=$generation error=$error',
       );
-      channel.ready.catchError((error) {
-        if (_socket != socket) return null;
-        CoduxLog.warn(
-          '[codux-flutter-ws] ready failed gen=$generation error=$error',
-        );
+      if (generation != _transportGeneration) return;
+      if (!_backgroundConnect && mounted) {
+        setState(() => _status = _t('connection.failedRetry'));
+      }
+      _handleIrohClosed('connect_failed');
+    });
+    _healthTimer = Timer(const Duration(seconds: 16), () {
+      if (generation != _transportGeneration) return;
+      if (!_irohReady) {
+        CoduxLog.warn('[codux-flutter-iroh] connect timeout gen=$generation');
         if (!_backgroundConnect && mounted) {
           setState(() => _status = _t('connection.failedRetry'));
         }
-        _handleSocketClosed(target, socket, 'ready_failed');
-        return null;
-      });
-      _healthTimer = Timer(const Duration(seconds: 6), () {
-        if (_socket == socket && !_relayReady) {
-          CoduxLog.warn('[codux-flutter-ws] hello timeout gen=$generation');
-          _handleSocketClosed(target, socket, 'hello_timeout');
-          socket.close();
-        }
-      });
-    } catch (error) {
-      CoduxLog.warn(
-        '[codux-flutter-ws] connect failed gen=$generation error=$error',
-      );
-      if (!background) {
-        setState(
-          () => _status = _t(
-            'connection.failedWithReason',
-            params: {'reason': '$error'},
-          ),
-        );
+        _handleIrohClosed('hello_timeout');
       }
-      _scheduleReconnect(target);
-    }
-  }
-
-  void _handleSocketClosed(
-    StoredDevice target,
-    WebSocketSinkLike closedSocket,
-    String reason,
-  ) {
-    if (_socket != closedSocket) return;
-    CoduxLog.info(
-      '[codux-flutter-ws] closed reason=$reason host=${target.hostId} device=${target.deviceId} transport=$_lastTransportState lastConnectedAt=${_lastConnectedAt?.toIso8601String() ?? 'null'}',
-    );
-    _healthTimer?.cancel();
-    _healthTimer = null;
-    _cancelHostResponseProbe();
-    _socketSubscription?.cancel();
-    _socketSubscription = null;
-    if (_socket != null) {
-      _socket = null;
-      unawaited(_p2pTransport.close());
-      setState(() {
-        _relayReady = false;
-        _remoteProtocolReady = false;
-        _hostResponsive = false;
-        _status = _t('app.reconnecting');
-        _terminalBufferRetry.reset();
-        _terminalBufferLoading = false;
-      });
-      if (_lastConnectedAt == null) {
-        _clearConnectionGrace();
-      } else {
-        _startConnectionGrace(reason: reason);
-      }
-      if (_appSuspended || !_appInForeground) {
-        CoduxLog.info(
-          '[codux-flutter-ws] reconnect deferred reason=$reason appSuspended=$_appSuspended',
-        );
-        return;
-      }
-      _scheduleReconnect(target);
-    }
+    });
   }
 
   void _scheduleReconnect(StoredDevice target) {
@@ -1082,12 +1097,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       ),
     );
     CoduxLog.info(
-      '[codux-flutter-ws] reconnect scheduled host=${target.hostId} device=${target.deviceId} attempt=$_reconnectAttempt delayMs=${delay.inMilliseconds}',
+      '[codux-flutter-iroh] reconnect scheduled host=${target.hostId} device=${target.deviceId} attempt=$_reconnectAttempt delayMs=${delay.inMilliseconds}',
     );
     _reconnectTimer = Timer(delay, () => _connect(target, true));
   }
 
-  void _sendInitialRelayRequests({bool force = false}) {
+  void _sendInitialTransportRequests({bool force = false}) {
     if (force) {
       _terminalBufferRetry.reset();
     }
@@ -1123,14 +1138,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _scheduleProjectListRetry() {
-    if (!_relayReady || _projectListLoaded) return;
+    if (!_transportReady || _projectListLoaded) return;
     _projectListRetryTimer?.cancel();
     if (_projectListRetryAttempt >= 6) return;
     final delay = Duration(
       milliseconds: (800 * (1 << _projectListRetryAttempt)).clamp(800, 5000),
     );
     _projectListRetryTimer = Timer(delay, () {
-      if (!mounted || !_relayReady || _projectListLoaded) return;
+      if (!mounted || !_transportReady || _projectListLoaded) return;
       _projectListRetryAttempt += 1;
       CoduxLog.info(
         '[codux-flutter-projects] retry project.list attempt=$_projectListRetryAttempt',
@@ -1163,15 +1178,32 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
+  void _requestWorktreeList({bool loading = false}) {
+    final project = _selectedProject;
+    if (!_remoteProtocolReady || project == null) return;
+    if (loading) {
+      setState(() => _worktreeListLoading = true);
+    }
+    _send(
+      RelayEnvelope(
+        type: 'worktree.list',
+        payload: {
+          'projectId': project.id,
+          if (project.path != null) 'projectPath': project.path,
+        },
+      ),
+    );
+  }
+
   void _scheduleTerminalListRetry() {
-    if (!_relayReady || _terminalListLoaded) return;
+    if (!_transportReady || _terminalListLoaded) return;
     _terminalListRetryTimer?.cancel();
     if (_terminalListRetryAttempt >= 6) return;
     final delay = Duration(
       milliseconds: (800 * (1 << _terminalListRetryAttempt)).clamp(800, 5000),
     );
     _terminalListRetryTimer = Timer(delay, () {
-      if (!mounted || !_relayReady || _terminalListLoaded) return;
+      if (!mounted || !_transportReady || _terminalListLoaded) return;
       _terminalListRetryAttempt += 1;
       CoduxLog.info(
         '[codux-flutter-terminal] retry terminal.list attempt=$_terminalListRetryAttempt',
@@ -1198,28 +1230,25 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  bool _send(RelayEnvelope message, [WebSocketSinkLike? target]) {
-    final sink = target ?? _socket;
-    if (sink == null) {
-      setState(() => _status = _t('app.wsNotConnected'));
+  bool _send(RelayEnvelope message) {
+    if (!_irohReady) {
+      setState(() => _status = _t('app.remoteNotConnected'));
       CoduxLog.warn(
-        '[codux-flutter-relay] drop type=${message.type} reason=no_socket',
+        '[codux-flutter-iroh] drop type=${message.type} reason=not_ready',
       );
       return false;
-    }
-    if (CoduxLog.isDebugEnabled && message.type.startsWith('terminal.')) {
-      CoduxLog.debug(
-        '[codux-flutter-relay] send type=${message.type} session=${message.sessionId ?? ''} payload=${message.payload ?? ''}',
-      );
     }
     final activeDevice = _activeDevice;
     final seq = activeDevice == null ? null : ++_sendSeq;
     final previous = _sendChain.catchError((_) {});
     final task = previous
         .then((_) async {
-          if (target == null && _socket != sink) return;
+          if (!_irohReady) return;
+          CoduxLog.warn(
+            '[codux-flutter-iroh] send type=${message.type} session=${message.sessionId ?? ''}',
+          );
           if (activeDevice == null) {
-            sink.add(encodeEnvelope(message));
+            await _irohTransport.send(message.toJson());
             return;
           }
           final encrypted = await RemoteE2ECrypto.encryptEnvelope(
@@ -1227,11 +1256,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             device: activeDevice,
             seq: seq!,
           );
-          if (target == null && _socket != sink) return;
-          sink.add(encodeEnvelope(encrypted));
+          if (!_irohReady) return;
+          await _irohTransport.send(encrypted.toJson());
         })
         .catchError((Object error) {
-          CoduxLog.error('[codux-flutter-e2e] encrypt failed: $error');
+          CoduxLog.error('[codux-flutter-e2e] iroh encrypt failed: $error');
           if (mounted) setState(() => _status = _t('pair.repairRequired'));
         });
     _sendChain = task;
@@ -1239,109 +1268,24 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   bool _sendTerminalEnvelope(RelayEnvelope message) {
-    if (_p2pTransport.isOpen) {
-      final sent = _p2pTransport.sendEnvelope(message);
-      if (sent) {
-        CoduxLog.debug(
-          '[codux-flutter-terminal] p2p send type=${message.type} session=${message.sessionId ?? ''}',
-        );
-        return true;
-      }
-    }
-    _ensureP2PStarted();
-    CoduxLog.debug(
-      '[codux-flutter-terminal] fallback relay type=${message.type} reason=p2p-not-open',
-    );
     return _send(message);
   }
 
-  Future<bool> _sendTerminalEnvelopeReliable(
-    RelayEnvelope message, {
-    Duration p2pOpenTimeout = const Duration(milliseconds: 1500),
-  }) async {
-    if (_p2pTransport.isOpen) {
-      final sent = await _p2pTransport.sendEnvelopeWithBackpressure(message);
-      if (sent) {
-        CoduxLog.debug(
-          '[codux-flutter-terminal] p2p send type=${message.type} session=${message.sessionId ?? ''}',
-        );
-        return true;
-      }
-      CoduxLog.debug(
-        '[codux-flutter-terminal] fallback relay type=${message.type} reason=p2p-send-failed',
-      );
-    } else {
-      _ensureP2PStarted();
-      if (await _p2pTransport.waitUntilOpen(timeout: p2pOpenTimeout)) {
-        final sent = await _p2pTransport.sendEnvelopeWithBackpressure(message);
-        if (sent) {
-          CoduxLog.debug(
-            '[codux-flutter-terminal] p2p send type=${message.type} session=${message.sessionId ?? ''}',
-          );
-          return true;
-        }
-      }
-      CoduxLog.debug(
-        '[codux-flutter-terminal] fallback relay type=${message.type} reason=p2p-not-open',
-      );
-    }
+  Future<bool> _sendTerminalEnvelopeReliable(RelayEnvelope message) async {
     return _send(message);
   }
 
   Future<bool> _sendTerminalUploadEnvelopeReliable(
     RelayEnvelope message,
   ) async {
-    if (!_isP2PHealthy || !_p2pTransport.isUploadOpen) {
-      _ensureP2PStarted();
-      CoduxLog.debug(
-        '[codux-flutter-upload] block type=${message.type} reason=upload-channel-not-ready',
-      );
-      return false;
-    }
-    final sent = await _p2pTransport.sendEnvelopeWithBackpressure(message);
-    if (sent) {
-      CoduxLog.debug(
-        '[codux-flutter-upload] p2p send type=${message.type} session=${message.sessionId ?? ''}',
-      );
-      return true;
-    }
-    CoduxLog.debug(
-      '[codux-flutter-upload] block type=${message.type} reason=p2p-send-failed',
-    );
-    return false;
+    return _send(message);
   }
 
-  void _ensureP2PStarted() {
-    if (!_relayReady || _socket == null) return;
-    unawaited(_p2pTransport.ensureStarted());
-  }
-
-  void _handleSocketMessage(
-    Object event,
-    StoredDevice target,
-    WebSocketSinkLike sourceSocket,
-  ) {
-    if (_socket != sourceSocket) return;
-    final previous = _receiveChain.catchError((_) {});
-    final task = previous
-        .then((_) {
-          if (_socket != sourceSocket) return Future<void>.value();
-          return _handleSocketMessageAsync(event, target);
-        })
-        .catchError((Object error) {
-          CoduxLog.error('[codux-flutter-e2e] receive queue failed: $error');
-        });
-    _receiveChain = task;
-  }
-
-  Future<void> _handleSocketMessageAsync(
-    Object event,
+  Future<void> _handleTransportEnvelope(
+    RelayEnvelope message,
     StoredDevice target,
   ) async {
     try {
-      var message = RelayEnvelope.fromJson(
-        jsonDecode('$event') as Map<String, dynamic>,
-      );
       if (message.type == 'secure.message') {
         message = await RemoteE2ECrypto.decryptEnvelope(
           outer: message,
@@ -1360,18 +1304,21 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       }
       _healthTimer?.cancel();
       _healthTimer = null;
+      CoduxLog.warn(
+        '[codux-flutter-iroh] recv type=${message.type} session=${message.sessionId ?? ''}',
+      );
       switch (message.type) {
         case 'hello':
-          if (!_relayReady) {
+          if (!_transportReady) {
             _reconnectAttempt = 0;
-            CoduxLog.info('[codux-flutter-ws] hello received');
+            CoduxLog.info('[codux-flutter-iroh] hello received');
             setState(() {
-              _relayReady = true;
+              _transportReady = true;
               _hasShownTerminal = true;
               if (!_backgroundConnect) _status = _t('app.connected');
             });
-            _markTransportConnected('relay');
-            _sendHostInfoProbe();
+            _markTransportConnected('iroh');
+            _sendHostInfoRequest();
             _startHostResponseProbe(reason: 'hello');
           }
         case 'host.offline':
@@ -1381,10 +1328,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               : _t('connection.macDisconnected');
           _terminalInputBatcher.reset();
           _clearPendingTerminalInputs();
-          unawaited(_p2pTransport.close());
           _clearLatencyProbe();
           setState(() {
-            _relayReady = false;
+            _transportReady = false;
             _remoteProtocolReady = false;
             _hostResponsive = false;
             _showTerminal = false;
@@ -1392,13 +1338,18 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _projects = [];
             _projectListLoaded = false;
             _terminals = [];
+            _worktrees = [];
+            _worktreeBaseBranches = [];
             _terminalListLoaded = false;
             _projectListRetryTimer?.cancel();
             _terminalListRetryTimer?.cancel();
             _projectListRetryAttempt = 0;
             _terminalListRetryAttempt = 0;
             _selectedProjectId = null;
+            _defaultWorktreeBaseBranch = null;
+            _selectedWorktreeId = null;
             _sessionId = null;
+            _showTerminalSwitcher = false;
             _status = messageText;
             _terminalBufferRetry.reset();
             _terminalBufferLoading = false;
@@ -1411,15 +1362,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _status = _t('pair.repairRequired');
           });
         case 'host.info':
-          _recordHostInfoLatency();
           if (!_isCompatibleRemoteProtocol(message.payload)) {
-            final socket = _socket;
-            if (socket != null) {
-              _failRemoteProtocol(target, socket, message.payload);
-            }
+            _failRemoteProtocol(target, message.payload);
             return;
           }
-          _markHostResponsive('host.info', transport: 'relay');
+          _markHostResponsive('host.info', transport: 'iroh');
           final payload = message.payload;
           if (payload is Map && payload['name'] != null) {
             _updateDevice(target.deviceId, hostName: '${payload['name']}');
@@ -1428,21 +1375,9 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             force: !_projectListLoaded || !_terminalListLoaded,
           );
           _startLatencyProbe();
-        case 'p2p.answer':
-          final payload = message.payload;
-          if (payload is Map) {
-            unawaited(_p2pTransport.handleAnswer(payload));
-          }
-        case 'p2p.candidate':
-          final payload = message.payload;
-          if (payload is Map) {
-            unawaited(_p2pTransport.handleCandidate(payload));
-          }
-        case 'p2p.state':
-          final payload = message.payload;
-          if (payload is Map) {
-            _p2pTransport.handleState(payload);
-          }
+        case 'transport.pong':
+          _markHostResponsive('transport.pong');
+          _recordTransportPong(message.payload);
         case 'project.list':
           _markHostResponsive('project.list');
           _markProjectListReceived();
@@ -1531,7 +1466,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               _terminalBufferLoading = false;
             });
             _clearTerminal();
-            _ensureP2PStarted();
             _flushPendingTerminalResize(force: true);
             _requestBufferIfReady();
             _terminalInputBatcher.flush();
@@ -1565,6 +1499,38 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _creatingTerminalProjectId = null;
           });
           if (closedActiveSession) _clearTerminal();
+        case 'worktree.list':
+          _markHostResponsive('worktree.list');
+          final payload = message.payload;
+          if (payload is Map) {
+            final list = _worktreeListPayload(payload);
+            setState(() {
+              _worktrees = list;
+              _selectedWorktreeId = payload['selectedWorktreeId']?.toString();
+              _worktreeBaseBranches = _stringListPayload(
+                payload['baseBranches'],
+              );
+              _defaultWorktreeBaseBranch = payload['defaultBaseBranch']
+                  ?.toString();
+              _worktreeListLoading = false;
+            });
+          }
+        case 'worktree.updated':
+          final payload = message.payload;
+          if (payload is Map) {
+            final list = _worktreeListPayload(payload);
+            setState(() {
+              _worktrees = list;
+              _selectedWorktreeId = payload['selectedWorktreeId']?.toString();
+              _worktreeBaseBranches = _stringListPayload(
+                payload['baseBranches'],
+              );
+              _defaultWorktreeBaseBranch = payload['defaultBaseBranch']
+                  ?.toString();
+              _worktreeListLoading = false;
+            });
+          }
+          _requestTerminalList(resetRetry: true);
         case 'terminal.output':
           _handleTerminalOutput(message);
         case 'file.list':
@@ -1653,6 +1619,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           setState(() {
             _aiStatsLoading = false;
             _filePickerLoading = false;
+            _worktreeListLoading = false;
             _blockingLoadingMessage = null;
             _status =
                 message.error ??
@@ -1666,44 +1633,157 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  void _handleP2PEnvelope(RelayEnvelope message) {
-    switch (message.type) {
-      case 'terminal.output':
-        _handleTerminalOutput(message);
-      case 'terminal.uploaded':
-        _handleTerminalUploaded(message);
-      case 'terminal.upload.ack':
-        _terminalUploadSender.handleAck(message);
-      case 'terminal.input.ack':
-        _handleTerminalInputAck(message);
-      case 'p2p.pong':
-        _handleP2PPong(message);
-      case 'error':
-        final payload = message.payload;
-        setState(() {
-          _terminalBufferLoading = false;
-          _status =
-              message.error ??
-              (payload is Map
-                  ? '${payload['message'] ?? _t('remote.error')}'
-                  : _t('remote.error'));
-        });
-      default:
-        CoduxLog.debug('[codux-flutter-p2p] ignore type=${message.type}');
+  void _handleIrohState(String rawState) {
+    final state = rawState.split(':').first.trim();
+    final detail = rawState.length > state.length
+        ? rawState.substring(state.length + 1).trim()
+        : '';
+    CoduxLog.warn(
+      detail.isEmpty
+          ? '[codux-flutter-iroh] state=$state'
+          : '[codux-flutter-iroh] state=$state detail=$detail',
+    );
+    if (!mounted || _disposing) return;
+    if (state == 'path') {
+      final path = _parseIrohPath(detail);
+      if (path != null) {
+        setState(() => _irohConnectionPath = path);
+      }
+      return;
+    }
+    final pairingCompleter = _irohPairingCompleter;
+    if (pairingCompleter != null) {
+      if (state == 'connected') {
+        _irohReady = true;
+        if (_pendingPairing != null) {
+          setState(() => _status = _t('pair.waiting'));
+        }
+        if (!_irohPairingRequestSent) {
+          final payload = _pendingPairing;
+          final name = _irohPairingDeviceName;
+          if (payload != null && name != null) {
+            _irohPairingRequestSent = true;
+            final request = irohPairingRequestEnvelope(payload, name).toJson();
+            unawaited(
+              _irohTransport
+                  .send(request)
+                  .then((sent) {
+                    if (!sent && !pairingCompleter.isCompleted) {
+                      pairingCompleter.completeError(
+                        Exception('Iroh pairing request failed'),
+                      );
+                    }
+                  })
+                  .catchError((Object error) {
+                    if (!pairingCompleter.isCompleted) {
+                      pairingCompleter.completeError(error);
+                    }
+                  }),
+            );
+          }
+        }
+        return;
+      }
+      if ((state == 'failed' || state == 'closed') &&
+          !pairingCompleter.isCompleted) {
+        pairingCompleter.completeError(
+          Exception('Iroh pairing connection $state'),
+        );
+        return;
+      }
+    }
+    if (state == 'connected') {
+      _reconnectAttempt = 0;
+      setState(() {
+        _irohReady = true;
+        _transportReady = true;
+        _hasShownTerminal = true;
+        if (!_backgroundConnect) _status = _t('app.connected');
+      });
+      _markTransportConnected('iroh');
+      _sendHostInfoRequest();
+      _startHostResponseProbe(reason: 'iroh');
+      return;
+    }
+    if (state == 'failed' || state == 'closed') {
+      _handleIrohClosed(state);
     }
   }
 
-  void _handleP2PPong(RelayEnvelope message) {
-    final payload = message.payload;
-    if (payload is! Map) return;
-    final id = payload['id']?.toString();
-    final rtt = _p2pHealth.handlePong(id);
-    if (rtt == null) return;
-    _markHostResponsive('p2p.pong', transport: 'p2p');
-    if (!mounted) return;
+  String? _parseIrohPath(String detail) {
+    for (final part in detail.split(';')) {
+      final trimmed = part.trim();
+      if (!trimmed.startsWith('path=')) continue;
+      final value = trimmed.substring(5).trim();
+      if (value == 'direct' ||
+          value == 'relay' ||
+          value == 'mixed' ||
+          value == 'none') {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  void _handleIrohEnvelope(RelayEnvelope message) {
+    CoduxLog.warn(
+      '[codux-flutter-iroh] envelope type=${message.type} session=${message.sessionId ?? ''}',
+    );
+    if (_irohPairingCompleter != null &&
+        (message.type == 'pairing.confirmed' ||
+            message.type == 'pairing.rejected')) {
+      _handleIrohPairingEnvelope(message);
+      return;
+    }
+    final target = _activeDevice;
+    if (target == null || target.transport != 'iroh') return;
+    final previous = _receiveChain.catchError((_) {});
+    final task = previous
+        .then((_) => _handleTransportEnvelope(message, target))
+        .catchError((Object error) {
+          CoduxLog.error('[codux-flutter-iroh] receive queue failed: $error');
+        });
+    _receiveChain = task;
+  }
+
+  void _handleIrohPairingEnvelope(RelayEnvelope message) {
+    final completer = _irohPairingCompleter;
+    final payload = _pendingPairing;
+    final name = _irohPairingDeviceName;
+    if (completer == null || payload == null || name == null) return;
+    if (message.type == 'pairing.confirmed') {
+      try {
+        completer.complete(
+          irohConfirmedDevice(payload: payload, name: name, confirmed: message),
+        );
+      } catch (error, stack) {
+        completer.completeError(error, stack);
+      }
+    } else if (message.type == 'pairing.rejected') {
+      completer.completeError(const PairingRejectedException());
+    }
+  }
+
+  void _handleIrohClosed(String reason) {
+    _irohReady = false;
+    if (_activeDevice?.transport != 'iroh') return;
     setState(() {
-      if (rtt > 0 && rtt < 60000) _latencyMs = rtt;
+      _transportReady = false;
+      _remoteProtocolReady = false;
+      _hostResponsive = false;
+      _status = _t('app.reconnecting');
+      _terminalBufferRetry.reset();
+      _terminalBufferLoading = false;
     });
+    if (_lastConnectedAt == null) {
+      _clearConnectionGrace();
+    } else {
+      _startConnectionGrace(reason: reason);
+    }
+    final target = _activeDevice;
+    if (target != null && _appInForeground && !_appSuspended) {
+      _scheduleReconnect(target);
+    }
   }
 
   void _handleTerminalOutput(RelayEnvelope message) {
@@ -1809,7 +1889,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   void _requestBufferIfReady({bool force = false, bool full = false}) {
-    _ensureP2PStarted();
     final sent = _terminalBufferRetry.requestIfReady(
       terminalReady: _terminalReady,
       sessionId: _sessionId,
@@ -1828,7 +1907,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                   'resumeFromSeq': _terminalOutputSeqBySession[sessionId],
               },
             ),
-            p2pOpenTimeout: const Duration(milliseconds: 700),
           ),
         );
         return true;
@@ -2160,7 +2238,37 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     return int.tryParse('${value ?? ''}');
   }
 
-  void _createTerminal([String? projectId]) {
+  List<String> _stringListPayload(Object? value) {
+    if (value is! List) return const [];
+    return value
+        .map((item) => '$item'.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+  }
+
+  List<RemoteWorktreeInfo> _worktreeListPayload(Map payload) {
+    final baseBranchByWorktreeId = <String, String>{};
+    final tasks = payload['tasks'];
+    if (tasks is List) {
+      for (final task in tasks.whereType<Map>()) {
+        final worktreeId = task['worktreeId']?.toString() ?? '';
+        final baseBranch = task['baseBranch']?.toString().trim() ?? '';
+        if (worktreeId.isEmpty || baseBranch.isEmpty) continue;
+        baseBranchByWorktreeId[worktreeId] = baseBranch;
+      }
+    }
+    return (payload['worktrees'] as List<dynamic>? ?? []).whereType<Map>().map((
+      item,
+    ) {
+      final worktree = RemoteWorktreeInfo.fromJson(
+        Map<String, dynamic>.from(item),
+      );
+      return worktree.copyWith(baseBranch: baseBranchByWorktreeId[worktree.id]);
+    }).toList();
+  }
+
+  void _createTerminal([String? projectId, String layoutKind = 'split']) {
     final target =
         projectId ??
         _selectedProjectId ??
@@ -2175,7 +2283,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _send(
       RelayEnvelope(
         type: 'terminal.create',
-        payload: {'projectId': target, 'command': ''},
+        payload: {'projectId': target, 'command': '', 'layoutKind': layoutKind},
       ),
     );
   }
@@ -2249,7 +2357,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     });
     final restored = _restoreTerminalSessionFromCache(terminal.id);
     if (!restored) _clearTerminal();
-    _ensureP2PStarted();
     _flushPendingTerminalResize(force: true);
     _requestBufferIfReady(force: true, full: !restored);
     _focusTerminalViewSoon();
@@ -2268,10 +2375,28 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _createTerminal(projectId);
   }
 
+  void _createCurrentProjectTabTerminal() {
+    final projectId = _selectedProjectId;
+    if (projectId == null) {
+      _showToast(_t('project.selectFirst'));
+      return;
+    }
+    setState(() => _workspaceMode = 'terminal');
+    _createTerminal(projectId, 'tab');
+  }
+
   void _closeCurrentTerminal() {
     final terminal = _currentTerminal();
     if (terminal == null || !_isAccessibleTerminal(terminal)) return;
-    _terminalInputBatcher.reset();
+    _closeTerminal(terminal);
+  }
+
+  void _closeTerminal(TerminalInfo terminal) {
+    if (!_isAccessibleTerminal(terminal)) return;
+    final closingCurrent = _sessionId == terminal.id;
+    if (closingCurrent) {
+      _terminalInputBatcher.reset();
+    }
     setState(() {
       _terminals = _terminals.where((item) => item.id != terminal.id).toList();
       _terminalOutputCache.remove(terminal.id);
@@ -2280,18 +2405,236 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _lastTerminalIdByProject.removeWhere(
         (_, terminalId) => terminalId == terminal.id,
       );
-      if (_sessionId == terminal.id) {
+      if (closingCurrent) {
         _sessionId = null;
         _terminalBufferRetry.reset();
         _terminalBufferLoading = false;
         _terminalCursorBottom = 0;
       }
     });
-    _clearTerminal();
+    if (closingCurrent) {
+      _clearTerminal();
+    }
     _send(RelayEnvelope(type: 'terminal.close', sessionId: terminal.id));
   }
 
+  Future<void> _openTerminalSwitcher() async {
+    if (_showTerminalSwitcher) return;
+    _requestWorktreeList(loading: _worktrees.isEmpty);
+    await _pushCupertinoPage(() {
+      _showTerminalSwitcher = true;
+    });
+  }
+
+  void _closeTerminalSwitcher() {
+    _popCupertinoPage(() {
+      _showTerminalSwitcher = false;
+    });
+  }
+
+  void _selectTerminalFromSwitcher(TerminalInfo terminal) {
+    _selectTerminal(terminal);
+    _closeTerminalSwitcher();
+  }
+
+  void _selectWorktree(RemoteWorktreeInfo worktree) {
+    final project = _selectedProject;
+    if (project == null) {
+      _showToast(_t('project.selectFirst'));
+      return;
+    }
+    setState(() => _worktreeListLoading = true);
+    _send(
+      RelayEnvelope(
+        type: 'worktree.select',
+        payload: {
+          'projectId': project.id,
+          'worktreeId': worktree.id,
+          if (project.path != null) 'projectPath': project.path,
+        },
+      ),
+    );
+  }
+
+  Future<void> _createWorktree() async {
+    final project = _selectedProject;
+    if (project == null || project.path == null || project.path!.isEmpty) {
+      _showToast(_t('project.selectPathFirst'));
+      return;
+    }
+    final branchOptions = _worktreeCreatorBranchOptions();
+    final request = await showDialog<_WorktreeCreateDraft>(
+      context: context,
+      builder: (ctx) => _WorktreeCreateDialog(
+        title: _t('worktree.new'),
+        baseBranchLabel: _t('worktree.baseBranch'),
+        nameLabel: _t('worktree.name'),
+        cancelLabel: _t('app.cancel'),
+        createLabel: _t('common.create'),
+        branchOptions: branchOptions,
+        initialBaseBranch: _worktreeCreatorDefaultBaseBranch(branchOptions),
+        initialName: _defaultWorktreeName(),
+      ),
+    );
+    if (request == null) return;
+    if (request.baseBranch.isEmpty) {
+      _showToast(_t('worktree.baseBranchRequired'));
+      return;
+    }
+    if (request.name.isEmpty) {
+      _showToast(_t('worktree.nameRequired'));
+      return;
+    }
+    setState(() => _worktreeListLoading = true);
+    _send(
+      RelayEnvelope(
+        type: 'worktree.create',
+        payload: {
+          'projectId': project.id,
+          'projectPath': project.path,
+          'baseBranch': request.baseBranch,
+          'branchName': request.name,
+          'taskTitle': request.name,
+        },
+      ),
+    );
+  }
+
+  List<String> _worktreeCreatorBranchOptions() {
+    final values = <String>[];
+    void push(String? value) {
+      final branch = value?.trim() ?? '';
+      if (branch.isEmpty || values.contains(branch)) return;
+      values.add(branch);
+    }
+
+    push(_defaultWorktreeBaseBranch);
+    for (final branch in _worktreeBaseBranches) {
+      push(branch);
+    }
+    for (final worktree in _worktrees) {
+      push(worktree.branch);
+    }
+    return values;
+  }
+
+  String _worktreeCreatorDefaultBaseBranch(List<String> options) {
+    final preferred = _defaultWorktreeBaseBranch?.trim() ?? '';
+    if (preferred.isNotEmpty && options.contains(preferred)) {
+      return preferred;
+    }
+    return options.isNotEmpty ? options.first : '';
+  }
+
+  Future<void> _mergeWorktree(RemoteWorktreeInfo worktree) async {
+    final confirmed = await _confirmWorktreeAction(
+      title: _t('worktree.merge'),
+      message: _t(
+        'worktree.mergeConfirm',
+        params: {'name': _worktreeTitle(worktree)},
+      ),
+      destructive: false,
+    );
+    if (!confirmed) return;
+    _sendWorktreeOperation('worktree.merge', worktree);
+  }
+
+  Future<void> _deleteWorktree(RemoteWorktreeInfo worktree) async {
+    final confirmed = await _confirmWorktreeAction(
+      title: _t('worktree.delete'),
+      message: _t(
+        'worktree.deleteConfirm',
+        params: {'name': _worktreeTitle(worktree)},
+      ),
+      destructive: true,
+    );
+    if (!confirmed) return;
+    _sendWorktreeOperation('worktree.delete', worktree);
+  }
+
+  void _sendWorktreeOperation(String type, RemoteWorktreeInfo worktree) {
+    final project = _selectedProject;
+    if (project == null || project.path == null || project.path!.isEmpty) {
+      _showToast(_t('project.selectPathFirst'));
+      return;
+    }
+    setState(() => _worktreeListLoading = true);
+    _send(
+      RelayEnvelope(
+        type: type,
+        payload: {
+          'projectId': project.id,
+          'projectPath': project.path,
+          'worktreePath': worktree.path,
+          'worktreeId': worktree.id,
+          if (type == 'worktree.delete') 'removeBranch': true,
+          if (type == 'worktree.merge') 'removeBranch': false,
+        },
+      ),
+    );
+  }
+
+  Future<bool> _confirmWorktreeAction({
+    required String title,
+    required String message,
+    required bool destructive,
+  }) async {
+    final accent = Theme.of(context).colorScheme.secondary;
+    return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: AppColors.bgSurface,
+            title: Text(title),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: _IconTextLabel(
+                  icon: Icons.close_rounded,
+                  label: _t('app.cancel'),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: TextButton.styleFrom(
+                  foregroundColor: destructive ? AppColors.danger : accent,
+                ),
+                child: _IconTextLabel(
+                  icon: destructive
+                      ? Icons.delete_outline_rounded
+                      : Icons.call_merge_rounded,
+                  label: title,
+                ),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  String _worktreeTitle(RemoteWorktreeInfo worktree) {
+    if (worktree.name.isNotEmpty) return worktree.name;
+    if (worktree.branch.isNotEmpty) return worktree.branch;
+    return worktree.id;
+  }
+
+  Future<void> _refreshDeviceList() async {
+    final device = _activeDevice;
+    if (device == null) return;
+    if (!_isConnected) {
+      _connect(device);
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      return;
+    }
+    _sendTransportPing();
+    _sendHostInfoRequest();
+    _requestProjectList(resetRetry: true);
+    _requestTerminalList(resetRetry: true);
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+  }
+
   void _refreshLists() {
+    _sendTransportPing();
     _requestProjectList(resetRetry: true);
     _requestTerminalList(resetRetry: true);
   }
@@ -2363,7 +2706,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               item.projectId == projectId &&
               _isAccessibleTerminal(item),
         )) {
-      _ensureP2PStarted();
       return;
     }
     final existing = _terminals.where(
@@ -2381,7 +2723,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       });
       final restored = _restoreTerminalSessionFromCache(terminal.id);
       if (!restored) _clearTerminal();
-      _ensureP2PStarted();
       _flushPendingTerminalResize(force: true);
       _requestBufferIfReady(force: true, full: !restored);
       _terminalInputBatcher.flush();
@@ -2542,7 +2883,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _showTerminalMode() {
     setState(() => _workspaceMode = 'terminal');
     _syncTerminalToSelectedProject();
-    _ensureP2PStarted();
     _requestBufferIfReady(force: true, full: true);
     _focusTerminalViewSoon();
   }
@@ -2729,8 +3069,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         .toList();
     if (_activeDevice?.deviceId == device.deviceId) {
       _shouldReconnect = false;
-      _socket?.close();
-      _socket = null;
+      _irohReady = false;
+      unawaited(_irohTransport.close());
       _clearLatencyProbe();
     }
     await _saveDevices(next);
@@ -2742,15 +3082,17 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _openDeviceTerminal(StoredDevice device) {
     if (device.deviceId != _activeDevice?.deviceId || !_isConnected) return;
     final terminal = _currentTerminal();
-    setState(() {
-      _showTerminal = true;
-      _workspaceMode = 'terminal';
-      _terminalBufferLoading = false;
-      if (terminal != null) {
-        _lastTerminalIdByProject[terminal.projectId] = terminal.id;
-      }
-    });
-    _sendInitialRelayRequests(force: true);
+    unawaited(
+      _pushCupertinoPage(() {
+        _showTerminal = true;
+        _workspaceMode = 'terminal';
+        _terminalBufferLoading = false;
+        if (terminal != null) {
+          _lastTerminalIdByProject[terminal.projectId] = terminal.id;
+        }
+      }),
+    );
+    _sendInitialTransportRequests(force: true);
     _requestBufferIfReady(force: true, full: true);
     _focusTerminalViewSoon();
   }
@@ -2760,7 +3102,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     final nameController = TextEditingController(
       text: device.hostName?.isNotEmpty == true ? device.hostName : device.name,
     );
-    final serverController = TextEditingController(text: device.server);
     final next = await showDialog<StoredDevice>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2774,18 +3115,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               cursorColor: accent,
               decoration: InputDecoration(
                 labelText: _t('device.nameLabel'),
-                labelStyle: const TextStyle(color: AppColors.textMuted),
-                focusedBorder: UnderlineInputBorder(
-                  borderSide: BorderSide(color: accent),
-                ),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.m),
-            TextField(
-              controller: serverController,
-              cursorColor: accent,
-              decoration: InputDecoration(
-                labelText: _t('device.serverLabel'),
                 labelStyle: const TextStyle(color: AppColors.textMuted),
                 focusedBorder: UnderlineInputBorder(
                   borderSide: BorderSide(color: accent),
@@ -2809,9 +3138,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                   hostName: nameController.text.trim().isEmpty
                       ? device.hostName
                       : nameController.text.trim(),
-                  server: serverController.text.trim().isEmpty
-                      ? device.server
-                      : serverController.text.trim(),
                 ),
               );
             },
@@ -2821,7 +3147,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       ),
     );
     nameController.dispose();
-    serverController.dispose();
     if (next == null) return;
     final devices = _devices
         .map((item) => item.deviceId == next.deviceId ? next : item)
@@ -2846,6 +3171,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _projectFilesParent = null;
       if (projectChanged) {
         _projectFilePathMemory.remove(project.id);
+        _worktrees = [];
+        _worktreeBaseBranches = [];
+        _defaultWorktreeBaseBranch = null;
+        _selectedWorktreeId = null;
       }
       if (resetTerminal) {
         _sessionId = null;
@@ -2858,6 +3187,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _send(
       RelayEnvelope(type: 'project.select', payload: {'projectId': project.id}),
     );
+    _requestWorktreeList(loading: _showTerminalSwitcher);
     if (_workspaceMode == 'stats') {
       _requestAIStats();
       return;
@@ -2903,12 +3233,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   Future<void> _chooseUploadForTerminal() async {
     if (_terminalUploadLoading) return;
-    if (!_isP2PHealthy || !_p2pTransport.isUploadOpen) {
-      _ensureP2PStarted();
-      _showSnack(_t('upload.p2pRequired'));
-      setState(() => _status = _t('upload.p2pRequired'));
+    if (!_canUploadOverCurrentPath) {
+      _showSnack(_t('upload.directRequired'));
+      setState(() => _status = _t('upload.directRequired'));
       return;
     }
+    final prefs = AppPreferences.of(context);
     final source = await showModalBottomSheet<_TerminalUploadSource>(
       context: context,
       backgroundColor: AppColors.bgElevated,
@@ -2917,7 +3247,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
       ),
       builder: (context) {
-        final prefs = AppPreferences.of(context);
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: AppSpacing.s),
@@ -2961,6 +3290,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   Future<void> _uploadPickedFileToTerminal(_TerminalUploadSource source) async {
     if (_terminalUploadLoading) return;
+    if (!_canUploadOverCurrentPath) {
+      _showSnack(_t('upload.directRequired'));
+      setState(() => _status = _t('upload.directRequired'));
+      return;
+    }
     final id = _sessionId;
     if (id == null) {
       setState(() => _status = _t('terminal.createOrSelectFirst'));
@@ -2988,6 +3322,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       return;
     }
     if (bytes.isEmpty) return;
+    if (!_canUploadOverCurrentPath) {
+      _showSnack(_t('upload.directRequired'));
+      setState(() => _status = _t('upload.directRequired'));
+      return;
+    }
     _terminalUploadCompletion?.completeError(
       StateError('Terminal upload superseded'),
     );
@@ -3038,6 +3377,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       });
     }
   }
+
+  bool get _canUploadOverCurrentPath => _irohConnectionPath == 'direct';
 
   String _mimeForUpload(String name, {required bool image}) {
     final parts = name.split('.');
@@ -3319,7 +3660,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       return;
     }
     if (_showSettings) {
-      setState(() => _showSettings = false);
+      _popCupertinoPage(() {
+        _showSettings = false;
+      });
+      return;
+    }
+    if (_showTerminalSwitcher) {
+      _popCupertinoPage(() {
+        _showTerminalSwitcher = false;
+      });
       return;
     }
     if (_pendingPairing != null) {
@@ -3327,13 +3676,125 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       return;
     }
     if (_showTerminal) {
-      setState(() {
+      _popCupertinoPage(() {
         _showTerminal = false;
         _workspaceMode = 'terminal';
       });
       return;
     }
-    _showToast(_t('device.alreadyInList'));
+    _disconnectTransport(status: _t('app.disconnected'), closeTerminal: true);
+    SystemNavigator.pop();
+  }
+
+  void _handleWorkspaceEdgeDragStart(DragStartDetails details) {
+    if (!Platform.isIOS ||
+        (!_showTerminal && !_showSettings && !_showTerminalSwitcher)) {
+      return;
+    }
+    final edgeWidth = MediaQuery.viewPaddingOf(context).left + 24.0;
+    final startX = details.localPosition.dx;
+    if (startX > edgeWidth) {
+      _edgeBackDragStartX = null;
+      return;
+    }
+    _edgeBackDragStartX = startX;
+    _edgeBackDragDeltaX = 0;
+    _edgeBackDragDeltaY = 0;
+    _edgeBackController.stop();
+  }
+
+  void _handleWorkspaceEdgeDragUpdate(DragUpdateDetails details) {
+    if (_edgeBackDragStartX == null) return;
+    _edgeBackDragDeltaX += details.delta.dx;
+    _edgeBackDragDeltaY += details.delta.dy;
+    final width = MediaQuery.sizeOf(context).width;
+    if (width <= 0) return;
+    _edgeBackController.value = (_edgeBackDragDeltaX / width).clamp(0.0, 1.0);
+  }
+
+  void _handleWorkspaceEdgeDragEnd(DragEndDetails details) {
+    if (_edgeBackDragStartX == null) return;
+    final dragX = _edgeBackDragDeltaX;
+    final dragY = _edgeBackDragDeltaY.abs();
+    final velocityX = details.velocity.pixelsPerSecond.dx;
+    _edgeBackDragStartX = null;
+    _edgeBackDragDeltaX = 0;
+    _edgeBackDragDeltaY = 0;
+    final width = MediaQuery.sizeOf(context).width;
+    final progress = width <= 0 ? 0.0 : (dragX / width).clamp(0.0, 1.0);
+    final shouldComplete =
+        dragX > 72 &&
+        dragX > dragY * 1.4 &&
+        (velocityX > 260 || progress > 0.34);
+    if (shouldComplete) {
+      unawaited(_completeCupertinoPageBack());
+    } else {
+      unawaited(
+        _edgeBackController.animateBack(
+          0,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    }
+  }
+
+  Future<void> _completeCupertinoPageBack() async {
+    await _edgeBackController.animateTo(
+      1,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+    );
+    if (!mounted) return;
+    setState(() {
+      if (_showSettings) {
+        _showSettings = false;
+      } else if (_showTerminalSwitcher) {
+        _showTerminalSwitcher = false;
+      } else {
+        _showTerminal = false;
+      }
+      _workspaceMode = 'terminal';
+    });
+    _edgeBackController.value = 0;
+  }
+
+  Future<void> _pushCupertinoPage(VoidCallback updateState) async {
+    _edgeBackController.value = 1;
+    setState(updateState);
+    await _edgeBackController.animateBack(
+      0,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  Future<void> _popCupertinoPage(VoidCallback updateState) async {
+    if (!Platform.isIOS) {
+      setState(updateState);
+      return;
+    }
+    await _edgeBackController.animateTo(
+      1,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+    if (!mounted) return;
+    setState(updateState);
+    _edgeBackController.value = 0;
+  }
+
+  void _cancelWorkspaceEdgeBack() {
+    _edgeBackDragStartX = null;
+    _edgeBackDragDeltaX = 0;
+    _edgeBackDragDeltaY = 0;
+    unawaited(
+      _edgeBackController.animateBack(
+        0,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+      ),
+    );
   }
 
   @override
@@ -3344,51 +3805,82 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _keyboardVisible = media.viewInsets.bottom > bottomInset + 8.0;
 
     final prefs = AppPreferences.of(context);
+    final deviceHome = DeviceHomeScreen(
+      devices: _devices,
+      activeDeviceId: _activeDevice?.deviceId,
+      ready: _isDeviceListConnected,
+      status: _deviceListStatusText,
+      latencyMs: _isDeviceListConnected ? _latencyMs : null,
+      topInset: topInset,
+      bottomInset: bottomInset,
+      onOpen: _openDeviceTerminal,
+      onConnect: (device) => _connect(device),
+      onAdd: () => setState(() => _showScanner = true),
+      onEdit: _editDevice,
+      onDelete: _confirmRemoveDevice,
+      onRefresh: _refreshDeviceList,
+      onSettings: () => _pushCupertinoPage(() {
+        _showSettings = true;
+      }),
+      onCheckUpdate: _checkUpdate,
+      onAbout: _showAboutDialogNow,
+    );
+    final settingsPage = SettingsScreen(
+      nameController: _settingsNameController,
+      detectedName: _detectedDeviceName,
+      topInset: topInset,
+      bottomInset: bottomInset,
+      currentAccent: prefs.accent,
+      currentLocale: prefs.locale,
+      onChangeAccent: (next) {
+        widget.onChangeAccent(next);
+        setState(() => _settings = _settings.copyWith(accentId: next.id));
+      },
+      onChangeLocale: (next) {
+        widget.onChangeLocale(next);
+        setState(() => _settings = _settings.copyWith(localeId: next.id));
+      },
+      onUseDetectedName: () =>
+          setState(() => _settingsNameController.text = _detectedDeviceName),
+      onSave: _saveSettings,
+      onBack: () => _popCupertinoPage(() {
+        _showSettings = false;
+      }),
+    );
+    final switcherPage = TerminalSwitcherScreen(
+      topInset: topInset,
+      bottomInset: bottomInset,
+      terminals: _currentProjectTerminals(),
+      worktrees: _worktrees,
+      activeTerminalId: _sessionId,
+      selectedWorktreeId: _selectedWorktreeId,
+      loadingWorktrees: _worktreeListLoading,
+      onBack: _closeTerminalSwitcher,
+      onSelectTerminal: _selectTerminalFromSwitcher,
+      onCreateSplit: _createCurrentProjectTerminal,
+      onCreateTab: _createCurrentProjectTabTerminal,
+      onCloseTerminal: _closeTerminal,
+      onSelectWorktree: _selectWorktree,
+      onCreateWorktree: _createWorktree,
+      onMergeWorktree: _mergeWorktree,
+      onDeleteWorktree: _deleteWorktree,
+      onRefreshWorktrees: () => _requestWorktreeList(loading: true),
+    );
     Widget body;
     if (_showSettings) {
-      body = SettingsScreen(
-        nameController: _settingsNameController,
-        detectedName: _detectedDeviceName,
-        topInset: topInset,
-        bottomInset: bottomInset,
-        currentAccent: prefs.accent,
-        currentLocale: prefs.locale,
-        onChangeAccent: (next) {
-          widget.onChangeAccent(next);
-          setState(() => _settings = _settings.copyWith(accentId: next.id));
-        },
-        onChangeLocale: (next) {
-          widget.onChangeLocale(next);
-          _p2pTransport.setPreferDomesticStun(
-            _preferDomesticStunForLocale(next.id),
-          );
-          setState(() => _settings = _settings.copyWith(localeId: next.id));
-        },
-        onUseDetectedName: () =>
-            setState(() => _settingsNameController.text = _detectedDeviceName),
-        onSave: _saveSettings,
-        onBack: () => setState(() => _showSettings = false),
+      body = _buildCupertinoBackPage(base: deviceHome, page: settingsPage);
+    } else if (_showTerminalSwitcher) {
+      body = _buildCupertinoBackPage(
+        base: _buildWorkspace(topInset, bottomInset),
+        page: switcherPage,
       );
     } else if (!_showTerminal) {
-      body = DeviceHomeScreen(
-        devices: _devices,
-        activeDeviceId: _activeDevice?.deviceId,
-        connected: _isDeviceListConnected,
-        status: _connectionStatusText,
-        latencyMs: _isDeviceListConnected ? _latencyMs : null,
-        topInset: topInset,
-        bottomInset: bottomInset,
-        onOpen: _openDeviceTerminal,
-        onConnect: (device) => _connect(device),
-        onAdd: () => setState(() => _showScanner = true),
-        onEdit: _editDevice,
-        onDelete: _confirmRemoveDevice,
-        onSettings: () => setState(() => _showSettings = true),
-        onCheckUpdate: _checkUpdate,
-        onAbout: _showAboutDialogNow,
-      );
+      body = deviceHome;
     } else {
-      body = _buildWorkspace(topInset, bottomInset);
+      body = _buildCupertinoBackPage(
+        base: deviceHome,
+        page: _buildWorkspace(topInset, bottomInset),
+      );
     }
 
     return PopScope(
@@ -3401,6 +3893,21 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         body: Stack(
           children: [
             body,
+            if (Platform.isIOS &&
+                (_showTerminal || _showSettings || _showTerminalSwitcher))
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: media.viewPadding.left + 36,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragStart: _handleWorkspaceEdgeDragStart,
+                  onHorizontalDragUpdate: _handleWorkspaceEdgeDragUpdate,
+                  onHorizontalDragEnd: _handleWorkspaceEdgeDragEnd,
+                  onHorizontalDragCancel: _cancelWorkspaceEdgeBack,
+                ),
+              ),
             if (_showScanner)
               ScannerScreen(
                 bottomInset: bottomInset,
@@ -3482,14 +3989,34 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
   }
 
-  bool _preferDomesticStunForLocale(String localeId) {
-    final option = LocaleChoices.byId(localeId);
-    if (option.id == 'simplifiedChinese' || option.id == 'traditionalChinese') {
-      return true;
-    }
-    if (option.id != 'system') return false;
-    return ui.PlatformDispatcher.instance.locale.languageCode.toLowerCase() ==
-        'zh';
+  Widget _buildCupertinoBackPage({required Widget base, required Widget page}) {
+    return AnimatedBuilder(
+      animation: _edgeBackController,
+      builder: (context, child) {
+        return Stack(
+          children: [
+            base,
+            cupertino.CupertinoPageTransition(
+              primaryRouteAnimation: ReverseAnimation(_edgeBackController),
+              secondaryRouteAnimation: const AlwaysStoppedAnimation<double>(0),
+              linearTransition: true,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.24),
+                      blurRadius: 16,
+                      offset: const Offset(-8, 0),
+                    ),
+                  ],
+                ),
+                child: page,
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Widget _buildWorkspace(double topInset, double bottomInset) {
@@ -3789,6 +4316,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
               ? _closeCurrentTerminal
               : null,
           onRebuild: _rebuildCurrentTerminal,
+          onOpenSwitcher: _openTerminalSwitcher,
         ),
         Expanded(
           child: _workspaceMode == 'stats'
@@ -3821,11 +4349,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 }
 
-abstract class WebSocketSinkLike {
-  void add(String data);
-  void close();
-}
-
 class _PendingTerminalInput {
   _PendingTerminalInput({
     required this.inputId,
@@ -3842,18 +4365,141 @@ class _PendingTerminalInput {
   Timer? retryTimer;
 }
 
+class _WorktreeCreateDraft {
+  const _WorktreeCreateDraft({required this.baseBranch, required this.name});
+
+  final String baseBranch;
+  final String name;
+}
+
+class _WorktreeCreateDialog extends StatefulWidget {
+  const _WorktreeCreateDialog({
+    required this.title,
+    required this.baseBranchLabel,
+    required this.nameLabel,
+    required this.cancelLabel,
+    required this.createLabel,
+    required this.branchOptions,
+    required this.initialBaseBranch,
+    required this.initialName,
+  });
+
+  final String title;
+  final String baseBranchLabel;
+  final String nameLabel;
+  final String cancelLabel;
+  final String createLabel;
+  final List<String> branchOptions;
+  final String initialBaseBranch;
+  final String initialName;
+
+  @override
+  State<_WorktreeCreateDialog> createState() => _WorktreeCreateDialogState();
+}
+
+class _WorktreeCreateDialogState extends State<_WorktreeCreateDialog> {
+  late final TextEditingController _nameController;
+  late String _baseBranch;
+
+  @override
+  void initState() {
+    super.initState();
+    _baseBranch = widget.initialBaseBranch;
+    _nameController = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.secondary;
+    return AlertDialog(
+      backgroundColor: AppColors.bgSurface,
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          DropdownButtonFormField<String>(
+            initialValue: widget.branchOptions.contains(_baseBranch)
+                ? _baseBranch
+                : null,
+            items: [
+              for (final branch in widget.branchOptions)
+                DropdownMenuItem(value: branch, child: Text(branch)),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _baseBranch = value);
+            },
+            decoration: InputDecoration(labelText: widget.baseBranchLabel),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          TextField(
+            controller: _nameController,
+            autofocus: true,
+            decoration: InputDecoration(labelText: widget.nameLabel),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: AppColors.textMuted),
+          onPressed: () => Navigator.pop(context),
+          child: _IconTextLabel(
+            icon: Icons.close_rounded,
+            label: widget.cancelLabel,
+          ),
+        ),
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: accent),
+          onPressed: () {
+            Navigator.pop(
+              context,
+              _WorktreeCreateDraft(
+                baseBranch: _baseBranch.trim(),
+                name: _nameController.text.trim(),
+              ),
+            );
+          },
+          child: _IconTextLabel(
+            icon: Icons.add_rounded,
+            label: widget.createLabel,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _defaultWorktreeName() {
+  final now = DateTime.now();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${now.year}${two(now.month)}${two(now.day)}-'
+      '${two(now.hour)}${two(now.minute)}${two(now.second)}';
+}
+
+class _IconTextLabel extends StatelessWidget {
+  const _IconTextLabel({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [Icon(icon, size: 17), const SizedBox(width: 6), Text(label)],
+    );
+  }
+}
+
 class _AvailableUpdate {
   const _AvailableUpdate({required this.version, required this.url});
 
   final String version;
   final String url;
-}
-
-class _WebSocketSink implements WebSocketSinkLike {
-  _WebSocketSink(this.channel);
-  final dynamic channel;
-  @override
-  void add(String data) => channel.sink.add(data);
-  @override
-  void close() => channel.sink.close();
 }

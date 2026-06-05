@@ -9,6 +9,9 @@ class PairingPayload {
     required this.matchCode,
     this.cryptoVersion = 1,
     this.hostName,
+    this.transport = 'iroh',
+    this.iroh,
+    this.pairingId,
   });
   final String server;
   final String code;
@@ -19,6 +22,38 @@ class PairingPayload {
   final String matchCode;
   final int cryptoVersion;
   final String? hostName;
+  final String transport;
+  final IrohNodeAddr? iroh;
+  final String? pairingId;
+}
+
+class IrohNodeAddr {
+  const IrohNodeAddr({
+    required this.nodeId,
+    this.relayUrl,
+    this.directAddresses = const [],
+  });
+
+  final String nodeId;
+  final String? relayUrl;
+  final List<String> directAddresses;
+
+  factory IrohNodeAddr.fromJson(Map<String, dynamic> json) => IrohNodeAddr(
+    nodeId: '${json['nodeId'] ?? ''}',
+    relayUrl: json['relayUrl']?.toString(),
+    directAddresses: (json['directAddresses'] as List? ?? const [])
+        .map((item) => '$item')
+        .where((item) => item.isNotEmpty)
+        .toList(),
+  );
+
+  IrohNodeAddr stable() => IrohNodeAddr(nodeId: nodeId);
+
+  Map<String, dynamic> toJson() => {
+    'nodeId': nodeId,
+    if (relayUrl != null && relayUrl!.isNotEmpty) 'relayUrl': relayUrl,
+    if (directAddresses.isNotEmpty) 'directAddresses': directAddresses,
+  };
 }
 
 class StoredDevice {
@@ -33,6 +68,8 @@ class StoredDevice {
     this.devicePublicKey = '',
     this.cryptoVersion = 0,
     this.hostName,
+    this.transport = 'iroh',
+    this.iroh,
   });
   final String server;
   final String hostId;
@@ -44,6 +81,8 @@ class StoredDevice {
   final String devicePublicKey;
   final int cryptoVersion;
   final String? hostName;
+  final String transport;
+  final IrohNodeAddr? iroh;
 
   StoredDevice copyWith({
     String? server,
@@ -56,6 +95,8 @@ class StoredDevice {
     String? devicePublicKey,
     int? cryptoVersion,
     String? hostName,
+    String? transport,
+    IrohNodeAddr? iroh,
   }) {
     return StoredDevice(
       server: server ?? this.server,
@@ -68,6 +109,8 @@ class StoredDevice {
       devicePublicKey: devicePublicKey ?? this.devicePublicKey,
       cryptoVersion: cryptoVersion ?? this.cryptoVersion,
       hostName: hostName ?? this.hostName,
+      transport: transport ?? this.transport,
+      iroh: iroh ?? this.iroh,
     );
   }
 
@@ -84,6 +127,10 @@ class StoredDevice {
         ? (json['cryptoVersion'] as num).toInt()
         : int.tryParse('${json['cryptoVersion'] ?? ''}') ?? 0,
     hostName: json['hostName'] == null ? null : '${json['hostName']}',
+    transport: '${json['transport'] ?? 'iroh'}',
+    iroh: json['iroh'] is Map
+        ? IrohNodeAddr.fromJson(Map<String, dynamic>.from(json['iroh'] as Map))
+        : null,
   );
 
   Map<String, dynamic> toJson() => {
@@ -97,6 +144,8 @@ class StoredDevice {
     if (devicePublicKey.isNotEmpty) 'devicePublicKey': devicePublicKey,
     if (cryptoVersion > 0) 'cryptoVersion': cryptoVersion,
     if (hostName != null) 'hostName': hostName,
+    'transport': transport,
+    if (iroh != null) 'iroh': iroh!.toJson(),
   };
 }
 
@@ -193,6 +242,7 @@ class TerminalInfo {
     required this.id,
     required this.title,
     required this.projectId,
+    this.layoutKind = 'split',
     this.cols,
     this.rows,
     this.status,
@@ -201,6 +251,7 @@ class TerminalInfo {
   final String id;
   final String title;
   final String projectId;
+  final String layoutKind;
   final int? cols;
   final int? rows;
   final String? status;
@@ -210,6 +261,7 @@ class TerminalInfo {
     id: '${json['id'] ?? ''}',
     title: '${json['title'] ?? 'Terminal'}',
     projectId: '${json['projectId'] ?? ''}',
+    layoutKind: '${json['layoutKind'] ?? 'split'}',
     cols: json['cols'] is num
         ? (json['cols'] as num).toInt()
         : int.tryParse('${json['cols'] ?? ''}'),
@@ -219,6 +271,81 @@ class TerminalInfo {
     status: json['status']?.toString(),
     createdAt: json['createdAt']?.toString(),
   );
+}
+
+class RemoteWorktreeInfo {
+  const RemoteWorktreeInfo({
+    required this.id,
+    required this.projectId,
+    required this.name,
+    required this.branch,
+    required this.path,
+    required this.status,
+    required this.isDefault,
+    required this.exists,
+    this.baseBranch,
+    this.changes = 0,
+    this.incoming = 0,
+    this.outgoing = 0,
+    this.additions = 0,
+    this.deletions = 0,
+  });
+
+  final String id;
+  final String projectId;
+  final String name;
+  final String branch;
+  final String path;
+  final String status;
+  final bool isDefault;
+  final bool exists;
+  final String? baseBranch;
+  final int changes;
+  final int incoming;
+  final int outgoing;
+  final int additions;
+  final int deletions;
+
+  factory RemoteWorktreeInfo.fromJson(Map<String, dynamic> json) {
+    final gitSummary = json['gitSummary'] is Map
+        ? Map<String, dynamic>.from(json['gitSummary'] as Map)
+        : const <String, dynamic>{};
+    return RemoteWorktreeInfo(
+      id: '${json['id'] ?? ''}',
+      projectId: '${json['projectId'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      branch: '${json['branch'] ?? ''}',
+      path: '${json['path'] ?? ''}',
+      status: '${json['status'] ?? ''}',
+      isDefault: json['isDefault'] == true,
+      exists: json['exists'] != false,
+      baseBranch: json['baseBranch']?.toString(),
+      changes: _intValue(gitSummary['changes']) ?? 0,
+      incoming: _intValue(gitSummary['incoming']) ?? 0,
+      outgoing: _intValue(gitSummary['outgoing']) ?? 0,
+      additions: _intValue(gitSummary['additions']) ?? 0,
+      deletions: _intValue(gitSummary['deletions']) ?? 0,
+    );
+  }
+
+  RemoteWorktreeInfo copyWith({String? baseBranch}) {
+    return RemoteWorktreeInfo(
+      id: id,
+      projectId: projectId,
+      name: name,
+      branch: branch,
+      path: path,
+      status: status,
+      isDefault: isDefault,
+      exists: exists,
+      baseBranch: baseBranch ?? this.baseBranch,
+      changes: changes,
+      incoming: incoming,
+      outgoing: outgoing,
+      additions: additions,
+      deletions: deletions,
+    );
+  }
 }
 
 class RemoteFileEntry {

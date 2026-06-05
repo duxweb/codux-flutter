@@ -105,6 +105,7 @@ class _DeviceRow extends StatelessWidget {
     final name = device.hostName?.isNotEmpty == true
         ? device.hostName!
         : device.name;
+    final protocol = _deviceProtocolLabel(context, device.transport);
     return InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -140,7 +141,7 @@ class _DeviceRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    device.server.replaceFirst(RegExp(r'^https?://'), ''),
+                    protocol,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -157,4 +158,12 @@ class _DeviceRow extends StatelessWidget {
       ),
     );
   }
+}
+
+String _deviceProtocolLabel(BuildContext context, String transport) {
+  final prefs = AppPreferences.of(context);
+  return switch (transport.toLowerCase()) {
+    'iroh' => prefs.t('connection.protocol.irohQuic'),
+    _ => transport.toUpperCase(),
+  };
 }

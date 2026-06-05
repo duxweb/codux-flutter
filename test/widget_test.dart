@@ -35,7 +35,7 @@ void main() {
       'pair.confirmTitle',
       'update.checking',
       'stats.aiTitle',
-      'relay.qrInvalid',
+      'remote.qrInvalid',
     ];
 
     for (final locale in LocaleChoices.all.where(

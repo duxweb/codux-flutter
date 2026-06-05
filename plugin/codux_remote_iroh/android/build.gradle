@@ -1,0 +1,133 @@
+group = "com.codux.remote_iroh"
+version = "0.1.0"
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.11.1"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+android {
+    namespace = "com.codux.remote_iroh"
+    compileSdk = 36
+
+    defaultConfig {
+        minSdk = 26
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+def rustDir = file("../rust")
+def generatedJniDir = file("$buildDir/generated/jniLibs")
+def androidTargets = [
+    "arm64-v8a": [
+        rustTarget: "aarch64-linux-android",
+        ar: "llvm-ar",
+        linker: "aarch64-linux-android${android.defaultConfig.minSdkVersion.apiLevel}-clang",
+        cxx: "aarch64-linux-android${android.defaultConfig.minSdkVersion.apiLevel}-clang++"
+    ]
+]
+
+tasks.register("buildIrohRustAndroid") {
+    inputs.dir(rustDir)
+    outputs.dir(generatedJniDir)
+    doLast {
+        def localProperties = new Properties()
+        def localPropertiesFile = rootProject.file("local.properties")
+        if (localPropertiesFile.exists()) {
+            localPropertiesFile.withInputStream { localProperties.load(it) }
+        }
+        def sdkDir = localProperties.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+        def ndkHome = System.getenv("ANDROID_NDK_HOME")
+            ?: System.getenv("ANDROID_NDK_ROOT")
+            ?: localProperties.getProperty("ndk.dir")
+        if (ndkHome == null || ndkHome.toString().trim().isEmpty()) {
+            try {
+                def agpNdkDirectory = android.ndkDirectory
+                if (agpNdkDirectory != null) {
+                    ndkHome = agpNdkDirectory.absolutePath
+                }
+            } catch (ignored) {
+                ndkHome = null
+            }
+        }
+        if ((ndkHome == null || ndkHome.toString().trim().isEmpty()) && sdkDir != null) {
+            def ndkRoot = new File(sdkDir, "ndk")
+            if (ndkRoot.exists()) {
+                def versions = ndkRoot.listFiles()?.findAll { new File(it, "ndk-build").exists() }?.sort { a, b -> b.name <=> a.name }
+                if (versions != null && !versions.isEmpty()) {
+                    ndkHome = versions.first().absolutePath
+                }
+            }
+        }
+        ndkHome = ndkHome == null ? null : new File(ndkHome.toString())
+        if (ndkHome == null || !ndkHome.exists()) {
+            throw new GradleException("Android NDK is required to build codux_remote_iroh")
+        }
+        def hostTag = org.gradle.internal.os.OperatingSystem.current().isMacOsX()
+            ? "darwin-x86_64"
+            : org.gradle.internal.os.OperatingSystem.current().isWindows()
+                ? "windows-x86_64"
+                : "linux-x86_64"
+        def toolchain = new File(ndkHome, "toolchains/llvm/prebuilt/${hostTag}/bin")
+        if (!toolchain.exists() && hostTag == "darwin-x86_64") {
+            toolchain = new File(ndkHome, "toolchains/llvm/prebuilt/darwin-arm64/bin")
+        }
+        if (!toolchain.exists()) {
+            throw new GradleException("Unable to locate Android NDK LLVM toolchain")
+        }
+        androidTargets.each { abi, spec ->
+            def rustEnv = spec.rustTarget.replace("-", "_")
+            def rustEnvUpper = spec.rustTarget.toUpperCase().replace("-", "_")
+            exec {
+                workingDir rustDir
+                environment "AR_${rustEnv}", new File(toolchain, spec.ar).absolutePath
+                environment "CC_${rustEnv}", new File(toolchain, spec.linker).absolutePath
+                environment "CXX_${rustEnv}", new File(toolchain, spec.cxx).absolutePath
+                environment "CARGO_TARGET_${rustEnvUpper}_LINKER", new File(toolchain, spec.linker).absolutePath
+                commandLine "rustup", "target", "add", spec.rustTarget
+            }
+            exec {
+                workingDir rustDir
+                environment "AR_${rustEnv}", new File(toolchain, spec.ar).absolutePath
+                environment "CC_${rustEnv}", new File(toolchain, spec.linker).absolutePath
+                environment "CXX_${rustEnv}", new File(toolchain, spec.cxx).absolutePath
+                environment "CARGO_TARGET_${rustEnvUpper}_LINKER", new File(toolchain, spec.linker).absolutePath
+                commandLine "cargo", "build", "--release", "--target", spec.rustTarget
+            }
+            copy {
+                from new File(rustDir, "target/${spec.rustTarget}/release/libcodux_remote_iroh_bridge.so")
+                into new File(generatedJniDir, abi)
+            }
+        }
+    }
+}
+
+android.sourceSets.main.jniLibs.srcDir generatedJniDir
+tasks.named("preBuild").configure {
+    dependsOn("buildIrohRustAndroid")
+}

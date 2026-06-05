@@ -70,5 +70,5 @@ class StorageService {
   }
 
   String _projectCacheKey(StoredDevice device) =>
-      '$projectCachePrefix.${device.server}.${device.hostId}';
+      '$projectCachePrefix.${device.hostId}';
 }

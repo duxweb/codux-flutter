@@ -27,9 +27,7 @@ class PairingOverlay extends StatelessWidget {
         ? payload.hostName!.trim()
         : 'Codux Mac';
     final code = payload.matchCode;
-    final hostFromServer = payload.server
-        .replaceFirst(RegExp(r'^https?://'), '')
-        .replaceFirst(RegExp(r'/$'), '');
+    final transport = payload.transport.toUpperCase();
 
     return Positioned.fill(
       child: GestureDetector(
@@ -114,7 +112,7 @@ class PairingOverlay extends StatelessWidget {
                     _InfoRow(
                       label: prefs.t('pair.device'),
                       value: hostName,
-                      hint: hostFromServer,
+                      hint: transport,
                     ),
                     const SizedBox(height: AppSpacing.s),
                     _CodeBlock(code: code, accent: accent),

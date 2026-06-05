@@ -8,21 +8,34 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('project list cache is scoped by host', () async {
+  test('project list cache is scoped by host without server url', () async {
     final storage = StorageService();
     const device = StoredDevice(
-      server: 'https://codux-service.dux.plus',
+      server: 'legacy-a',
       hostId: 'host-1',
       deviceId: 'device-1',
       token: 'token',
       name: 'Phone',
+      transport: 'iroh',
+      iroh: IrohNodeAddr(nodeId: 'node-1'),
+    );
+    const sameHostWithDifferentLegacyServer = StoredDevice(
+      server: 'legacy-b',
+      hostId: 'host-1',
+      deviceId: 'device-1',
+      token: 'token',
+      name: 'Phone',
+      transport: 'iroh',
+      iroh: IrohNodeAddr(nodeId: 'node-1'),
     );
 
     await storage.saveCachedProjects(device, const [
       ProjectInfo(id: 'project-1', name: 'Codux', path: '/Volumes/Web/codux'),
     ]);
 
-    final cached = await storage.loadCachedProjects(device);
+    final cached = await storage.loadCachedProjects(
+      sameHostWithDifferentLegacyServer,
+    );
 
     expect(cached, hasLength(1));
     expect(cached.single.id, 'project-1');
