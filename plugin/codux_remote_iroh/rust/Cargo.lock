@@ -289,6 +289,8 @@ version = "0.1.0"
 dependencies = [
  "futures-lite",
  "iroh",
+ "jni-sys",
+ "ndk-context",
  "once_cell",
  "rand 0.8.6",
  "serde",

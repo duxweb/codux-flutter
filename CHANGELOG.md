@@ -4,6 +4,13 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-06-06
+
+### Fixed
+
+- Fixed Android Iroh endpoint startup after the 1.0.0-rc.1 upgrade by initializing the Android native context required by the Iroh DNS resolver.
+- Added native Iroh endpoint bind progress states and timeout reporting so connection startup failures no longer remain stuck at connecting.
+
 ## [1.6.2] - 2026-06-05
 
 ### Changed

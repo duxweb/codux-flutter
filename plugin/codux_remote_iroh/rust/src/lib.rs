@@ -6,6 +6,8 @@ use iroh::{
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+#[cfg(target_os = "android")]
+use std::sync::atomic::AtomicBool;
 use std::{
     collections::{HashMap, VecDeque},
     ffi::{CStr, CString},
@@ -27,6 +29,8 @@ use tokio::{
 const ALPN: &[u8] = b"codux/remote/iroh/v1";
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+#[cfg(target_os = "android")]
+static ANDROID_CONTEXT_READY: AtomicBool = AtomicBool::new(false);
 static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().expect("create iroh runtime"));
 static CLIENTS: Lazy<Mutex<HashMap<u64, ClientHandle>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -193,6 +197,37 @@ pub extern "C" fn codux_iroh_free_string(value: *mut c_char) {
     }
 }
 
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_codux_remote_1iroh_CoduxRemoteIrohPlugin_initializeNativeContext(
+    env: *mut jni_sys::JNIEnv,
+    _class: jni_sys::jclass,
+    context: jni_sys::jobject,
+) {
+    if env.is_null() || context.is_null() {
+        return;
+    }
+    if ANDROID_CONTEXT_READY
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let mut java_vm: *mut jni_sys::JavaVM = std::ptr::null_mut();
+    if unsafe { ((**env).v1_2.GetJavaVM)(env, &mut java_vm) } != 0 || java_vm.is_null() {
+        ANDROID_CONTEXT_READY.store(false, Ordering::SeqCst);
+        return;
+    }
+    let global_context = unsafe { ((**env).v1_1.NewGlobalRef)(env, context) };
+    if global_context.is_null() {
+        ANDROID_CONTEXT_READY.store(false, Ordering::SeqCst);
+        return;
+    }
+    unsafe {
+        ndk_context::initialize_android_context(java_vm.cast(), global_context.cast());
+    }
+}
+
 async fn run_client(
     handle: u64,
     request: ConnectRequest,
@@ -202,11 +237,21 @@ async fn run_client(
     emit(&events, json!({ "type": "state", "state": "connecting" }));
     let result = async {
         let relay_mode = relay_mode_from_url(request.relay_url.as_deref())?;
-        let endpoint = Endpoint::builder(presets::N0)
-            .relay_mode(relay_mode)
-            .bind()
-            .await
-            .map_err(|error| error.to_string())?;
+        emit(
+            &events,
+            json!({ "type": "state", "state": "binding_endpoint" }),
+        );
+        let endpoint = timeout(
+            Duration::from_secs(8),
+            Endpoint::builder(presets::N0).relay_mode(relay_mode).bind(),
+        )
+        .await
+        .map_err(|_| "Iroh endpoint bind timed out".to_string())?
+        .map_err(|error| error.to_string())?;
+        emit(
+            &events,
+            json!({ "type": "state", "state": "endpoint_bound" }),
+        );
         if let Ok(mut clients) = CLIENTS.lock() {
             if let Some(client) = clients.get_mut(&handle) {
                 client.endpoint = Some(endpoint.clone());

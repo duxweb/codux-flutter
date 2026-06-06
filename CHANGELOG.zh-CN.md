@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-06-06
+
+### 修复
+
+- 修复升级到 Iroh 1.0.0-rc.1 后 Android 端 Endpoint 启动卡在连接中的问题，补齐 Iroh DNS Resolver 所需的 Android 原生 Context 初始化。
+- 增加原生 Iroh Endpoint bind 阶段状态和超时错误，后续连接启动异常不会再只停留在“连接中”。
+
 ## [1.6.2] - 2026-06-05
 
 ### 调整
