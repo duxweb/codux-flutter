@@ -240,6 +240,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _hostResponseTimer;
   Timer? _latencyProbeTimer;
   Timer? _pingTimeoutTimer;
+  Timer? _backgroundDisconnectTimer;
   int _projectListRetryAttempt = 0;
   int _terminalListRetryAttempt = 0;
   double? _edgeBackDragStartX;
@@ -527,6 +528,35 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
   }
 
+  void _cancelBackgroundDisconnect() {
+    _backgroundDisconnectTimer?.cancel();
+    _backgroundDisconnectTimer = null;
+  }
+
+  void _scheduleBackgroundDisconnect(AppLifecycleState state) {
+    _cancelBackgroundDisconnect();
+    if (!_irohReady || _activeDevice == null) return;
+    CoduxLog.info(
+      '[codux-flutter-lifecycle] background disconnect scheduled state=${state.name}',
+    );
+    _backgroundDisconnectTimer = Timer(const Duration(seconds: 30), () {
+      if (!mounted || _disposing || _appInForeground || !_appSuspended) return;
+      CoduxLog.info(
+        '[codux-flutter-lifecycle] background disconnect run state=${state.name}',
+      );
+      _disconnectTransport(
+        status: _t('app.disconnected'),
+        closeTerminal: false,
+      );
+      if (mounted) {
+        setState(() {
+          _terminalBufferRetry.reset();
+          _terminalBufferLoading = false;
+        });
+      }
+    });
+  }
+
   void _failHostConnection(StoredDevice target, String reason) {
     CoduxLog.warn(
       '[codux-flutter-remote] host unavailable reason=$reason host=${target.hostId} device=${target.deviceId}',
@@ -677,6 +707,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _connectionGraceTimer?.cancel();
     _latencyProbeTimer?.cancel();
     _pingTimeoutTimer?.cancel();
+    _backgroundDisconnectTimer?.cancel();
     _toastTimer?.cancel();
     _filePickerTimeoutTimer?.cancel();
     _projectListRetryTimer?.cancel();
@@ -706,6 +737,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     CoduxLog.info('[codux-flutter-lifecycle] state=${state.name}');
     if (state == AppLifecycleState.resumed) {
+      _cancelBackgroundDisconnect();
       _appInForeground = true;
       _appSuspended = false;
       final device = _activeDevice;
@@ -730,11 +762,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       CoduxLog.info('[codux-flutter-lifecycle] pause ignored for voice input');
       return;
     }
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached ||
-        state == AppLifecycleState.hidden) {
+    if (state == AppLifecycleState.detached) {
       _appInForeground = false;
       _appSuspended = true;
+      _cancelBackgroundDisconnect();
       _disconnectTransport(
         status: _t('app.disconnected'),
         closeTerminal: false,
@@ -745,6 +776,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           _terminalBufferLoading = false;
         });
       }
+      return;
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _appInForeground = false;
+      _appSuspended = true;
+      _scheduleBackgroundDisconnect(state);
     }
   }
 
@@ -1987,6 +2025,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       updated = item.copyWith(hostName: hostName, iroh: iroh);
       return updated!;
     }).toList();
+    if (updated != null) {
+      setState(() {
+        _devices = next;
+        if (_activeDevice?.deviceId == deviceId) {
+          _activeDevice = updated;
+        }
+      });
+    }
     _saveDevices(next);
     return updated;
   }

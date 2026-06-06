@@ -191,7 +191,7 @@ void main() {
   );
 
   testWidgets(
-    'foreground resume refreshes host snapshots on existing iroh link',
+    'foreground resume refreshes host snapshots without reconnecting iroh',
     (tester) async {
       final bridge = _FakeIrohBridge();
       await _pumpApp(tester, bridge);
@@ -203,13 +203,42 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump();
       _emitHostReady(session);
-      await _pumpUntil(tester, () => bridge.sessions.length > 1);
+      await _pumpUntil(tester, () => session.sentTypes.length > before);
 
-      expect(bridge.sessions.length, greaterThan(1));
-      expect(session.sentTypes.length, before);
-      expect(find.text('QUIC'), findsWidgets);
+      expect(bridge.sessions.length, 1);
+      expect(session.closed, isFalse);
+      expect(session.sentTypes.length, greaterThan(before));
     },
   );
+
+  testWidgets('relay path reconnects after earlier host info address update', (
+    tester,
+  ) async {
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    await _pumpUntil(tester, () => bridge.sessions.isNotEmpty);
+    final session = bridge.sessions.single;
+    session.emitState('connected');
+    session.emitEnvelope({
+      'type': 'host.info',
+      'payload': {
+        'name': 'Mac',
+        'protocolVersion': 'v2.0',
+        'iroh': {
+          'nodeId': 'node-1',
+          'relayUrl': 'https://relay.iroh.network',
+          'directAddresses': ['203.0.113.1:12345'],
+        },
+      },
+    });
+    await _pumpUntil(tester, () => bridge.addedNodeAddrs.isNotEmpty);
+
+    session.emitPath('relay');
+    await _pumpUntil(tester, () => bridge.sessions.length > 1);
+
+    expect(bridge.sessions.length, 2);
+    expect(bridge.sessions.first.closed, isTrue);
+  });
 
   testWidgets('iroh close reconnects through iroh', (tester) async {
     final bridge = _FakeIrohBridge();
