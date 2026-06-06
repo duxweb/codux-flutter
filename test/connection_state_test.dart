@@ -93,13 +93,44 @@ void main() {
       },
     ]);
     final prefs = await SharedPreferences.getInstance();
-    final stored = jsonDecode(prefs.getString(StorageService.devicesKey)!)
-        as List<dynamic>;
+    final stored =
+        jsonDecode(prefs.getString(StorageService.devicesKey)!)
+            as List<dynamic>;
     final device = StoredDevice.fromJson(
       Map<String, dynamic>.from(stored.single as Map),
     );
     expect(device.iroh?.relayUrl, 'https://relay.iroh.network');
     expect(device.iroh?.directAddresses, ['203.0.113.1:12345']);
+
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(bridge.sessions.length, 1);
+  });
+
+  testWidgets('relay path reconnects once when host info adds direct address', (
+    tester,
+  ) async {
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    await _pumpUntil(tester, () => bridge.sessions.isNotEmpty);
+    final session = bridge.sessions.single;
+    session.emitState('connected');
+    session.emitPath('relay');
+    session.emitEnvelope({
+      'type': 'host.info',
+      'payload': {
+        'name': 'Mac',
+        'protocolVersion': 'v2.0',
+        'iroh': {
+          'nodeId': 'node-1',
+          'relayUrl': 'https://relay.iroh.network',
+          'directAddresses': ['203.0.113.1:12345'],
+        },
+      },
+    });
+    await _pumpUntil(tester, () => bridge.sessions.length > 1);
+
+    expect(bridge.sessions.length, 2);
+    expect(bridge.sessions.first.closed, isTrue);
   });
 
   testWidgets('device can dial with node id only when no address hints exist', (

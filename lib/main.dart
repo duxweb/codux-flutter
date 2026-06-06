@@ -255,6 +255,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   int _pingSeq = 0;
   int? _latencyMs;
   Timer? _connectionGraceTimer;
+  String? _lastIrohUpgradeSignature;
+  DateTime? _lastIrohUpgradeAttemptAt;
 
   bool get _isConnected => _irohReady && _transportReady;
   bool get _isHostReady =>
@@ -1037,6 +1039,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _transportReady = false;
       _remoteProtocolReady = false;
       _hostResponsive = false;
+      _irohConnectionPath = 'unknown';
+      _latencyMs = null;
       if (!background) {
         _status = _t('app.connecting');
         _projects = [];
@@ -1376,13 +1380,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           final payload = message.payload;
           if (payload is Map) {
             final iroh = _updateRuntimeIrohNodeAddr(payload['iroh']);
+            StoredDevice? updatedDevice;
             if (payload['name'] != null || iroh != null) {
-              _updateDevice(
+              updatedDevice = _updateDevice(
                 target.deviceId,
                 hostName: payload['name']?.toString(),
                 iroh: iroh,
               );
             }
+            _maybeReconnectForIrohDirectAddress(updatedDevice ?? target, iroh);
           }
           _markRemoteProtocolReady(
             force: !_projectListLoaded || !_terminalListLoaded,
@@ -1669,7 +1675,17 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           _irohConnectionPath = path;
           if (changed) _latencyMs = null;
         });
-        if (changed) _sendTransportPing();
+        if (path == 'direct') {
+          _lastIrohUpgradeSignature = null;
+          _lastIrohUpgradeAttemptAt = null;
+        }
+        if (changed) {
+          _sendTransportPing();
+          final device = _activeDevice;
+          if (device != null) {
+            _maybeReconnectForIrohDirectAddress(device, device.iroh);
+          }
+        }
       }
       return;
     }
@@ -1801,6 +1817,41 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     return addr;
   }
 
+  void _maybeReconnectForIrohDirectAddress(
+    StoredDevice device,
+    IrohNodeAddr? addr,
+  ) {
+    if (addr == null || addr.directAddresses.isEmpty) return;
+    if (_irohConnectionPath != 'relay' && _irohConnectionPath != 'mixed') {
+      return;
+    }
+    final signature = [
+      addr.nodeId,
+      addr.relayUrl ?? '',
+      ...(addr.directAddresses.toSet().toList()..sort()),
+    ].join('|');
+    final now = DateTime.now();
+    final lastAttemptAt = _lastIrohUpgradeAttemptAt;
+    if (_lastIrohUpgradeSignature == signature &&
+        lastAttemptAt != null &&
+        now.difference(lastAttemptAt) < const Duration(minutes: 2)) {
+      return;
+    }
+    _lastIrohUpgradeSignature = signature;
+    _lastIrohUpgradeAttemptAt = now;
+    CoduxLog.info(
+      '[codux-flutter-iroh] reconnect for direct candidates direct=${addr.directAddresses.length} path=$_irohConnectionPath',
+    );
+    Future<void>.delayed(const Duration(milliseconds: 120), () {
+      if (!mounted || _disposing) return;
+      if (_activeDevice?.deviceId != device.deviceId) return;
+      if (_irohConnectionPath != 'relay' && _irohConnectionPath != 'mixed') {
+        return;
+      }
+      _connect(device, true);
+    });
+  }
+
   void _handleIrohClosed(String reason) {
     _irohReady = false;
     if (_activeDevice?.transport != 'iroh') return;
@@ -1925,15 +1976,19 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  void _updateDevice(String deviceId, {String? hostName, IrohNodeAddr? iroh}) {
-    final next = _devices
-        .map(
-          (item) => item.deviceId == deviceId
-              ? item.copyWith(hostName: hostName, iroh: iroh)
-              : item,
-        )
-        .toList();
+  StoredDevice? _updateDevice(
+    String deviceId, {
+    String? hostName,
+    IrohNodeAddr? iroh,
+  }) {
+    StoredDevice? updated;
+    final next = _devices.map((item) {
+      if (item.deviceId != deviceId) return item;
+      updated = item.copyWith(hostName: hostName, iroh: iroh);
+      return updated!;
+    }).toList();
     _saveDevices(next);
+    return updated;
   }
 
   void _requestBufferIfReady({bool force = false, bool full = false}) {

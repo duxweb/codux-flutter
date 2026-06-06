@@ -1,6 +1,7 @@
 use futures_lite::StreamExt;
 use iroh::{
     Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, TransportAddr,
+    address_lookup::memory::MemoryLookup,
     endpoint::{PathEvent, presets},
 };
 use once_cell::sync::Lazy;
@@ -91,6 +92,7 @@ fn relay_mode_from_url(value: Option<&str>) -> Result<RelayMode, String> {
 
 struct ClientHandle {
     endpoint: Option<Endpoint>,
+    address_lookup: MemoryLookup,
     tx: mpsc::UnboundedSender<Vec<u8>>,
     events: std::sync::Arc<Mutex<VecDeque<String>>>,
     closed: bool,
@@ -104,14 +106,19 @@ pub extern "C" fn codux_iroh_connect(config_json: *const c_char) -> u64 {
     let Ok(request) = serde_json::from_str::<ConnectRequest>(&config) else {
         return 0;
     };
+    let Ok(initial_addr) = request.node_addr.to_endpoint_addr() else {
+        return 0;
+    };
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let events = std::sync::Arc::new(Mutex::new(VecDeque::new()));
+    let address_lookup = MemoryLookup::from_endpoint_info([initial_addr]);
     CLIENTS.lock().ok().map(|mut clients| {
         clients.insert(
             handle,
             ClientHandle {
                 endpoint: None,
+                address_lookup: address_lookup.clone(),
                 tx,
                 events: events.clone(),
                 closed: false,
@@ -145,13 +152,18 @@ pub extern "C" fn codux_iroh_add_node_addr(handle: u64, node_addr_json: *const c
     let Ok(node_addr) = serde_json::from_str::<RemoteIrohNodeAddr>(&config) else {
         return false;
     };
-    let Ok(_node_addr) = node_addr.to_endpoint_addr() else {
+    let Ok(endpoint_addr) = node_addr.to_endpoint_addr() else {
         return false;
     };
     CLIENTS
         .lock()
         .ok()
-        .and_then(|clients| clients.get(&handle).map(|_| true))
+        .and_then(|clients| {
+            clients.get(&handle).map(|client| {
+                client.address_lookup.add_endpoint_info(endpoint_addr);
+                true
+            })
+        })
         .unwrap_or(false)
 }
 
@@ -237,13 +249,25 @@ async fn run_client(
     emit(&events, json!({ "type": "state", "state": "connecting" }));
     let result = async {
         let relay_mode = relay_mode_from_url(request.relay_url.as_deref())?;
+        let address_lookup = CLIENTS
+            .lock()
+            .ok()
+            .and_then(|clients| {
+                clients
+                    .get(&handle)
+                    .map(|client| client.address_lookup.clone())
+            })
+            .ok_or_else(|| "Iroh client handle is closed".to_string())?;
         emit(
             &events,
             json!({ "type": "state", "state": "binding_endpoint" }),
         );
         let endpoint = timeout(
             Duration::from_secs(8),
-            Endpoint::builder(presets::N0).relay_mode(relay_mode).bind(),
+            Endpoint::builder(presets::N0)
+                .address_lookup(address_lookup)
+                .relay_mode(relay_mode)
+                .bind(),
         )
         .await
         .map_err(|_| "Iroh endpoint bind timed out".to_string())?

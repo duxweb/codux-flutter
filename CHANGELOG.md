@@ -4,6 +4,14 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-06-06
+
+### Fixed
+
+- Fixed Iroh direct-address updates so host-provided addresses are added to the native lookup table instead of being ignored.
+- Prevented normal terminal navigation, project switching, and host info refreshes from triggering reconnects unless the native path is confirmed as relay or mixed.
+- Added a cooldown for relay-to-direct upgrade reconnects to avoid reconnect loops when direct paths are unavailable.
+
 ## [1.6.3] - 2026-06-06
 
 ### Fixed
