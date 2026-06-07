@@ -4,6 +4,12 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.6.8] - 2026-06-07
+
+### Changed
+
+- Published a higher Android build number for release-channel P2P verification without changing transport behavior.
+
 ## [1.6.7] - 2026-06-07
 
 ### Fixed
