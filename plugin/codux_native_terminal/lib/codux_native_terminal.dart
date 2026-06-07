@@ -156,6 +156,7 @@ class CoduxNativeTerminalView extends StatefulWidget {
   const CoduxNativeTerminalView({
     super.key,
     this.onControllerCreated,
+    this.onControllerDisposed,
     this.onInput,
     this.onTerminalResponse,
     this.onResize,
@@ -164,6 +165,7 @@ class CoduxNativeTerminalView extends StatefulWidget {
   });
 
   final ValueChanged<CoduxNativeTerminalController>? onControllerCreated;
+  final ValueChanged<CoduxNativeTerminalController>? onControllerDisposed;
   final CoduxTerminalInputCallback? onInput;
   final CoduxTerminalResponseCallback? onTerminalResponse;
   final CoduxTerminalResizeCallback? onResize;
@@ -194,7 +196,11 @@ class _CoduxNativeTerminalViewState extends State<CoduxNativeTerminalView> {
 
   @override
   void dispose() {
-    _controller?.dispose();
+    final controller = _controller;
+    if (controller != null) {
+      widget.onControllerDisposed?.call(controller);
+      controller.dispose();
+    }
     super.dispose();
   }
 

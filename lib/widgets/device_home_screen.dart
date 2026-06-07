@@ -22,6 +22,7 @@ class DeviceHomeScreen extends StatelessWidget {
     required this.onDelete,
     required this.onRefresh,
     required this.onSettings,
+    required this.onLogs,
     required this.onCheckUpdate,
     required this.onAbout,
   });
@@ -40,6 +41,7 @@ class DeviceHomeScreen extends StatelessWidget {
   final ValueChanged<StoredDevice> onDelete;
   final Future<void> Function() onRefresh;
   final VoidCallback onSettings;
+  final VoidCallback onLogs;
   final VoidCallback onCheckUpdate;
   final VoidCallback onAbout;
 
@@ -91,6 +93,7 @@ class DeviceHomeScreen extends StatelessWidget {
               const SizedBox(width: AppSpacing.s),
               MoreMenu(
                 onAddDevice: onAdd,
+                onLogs: onLogs,
                 onCheckUpdate: onCheckUpdate,
                 onAbout: onAbout,
               ),

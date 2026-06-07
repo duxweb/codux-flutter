@@ -6,6 +6,7 @@ class MoreMenu extends StatelessWidget {
   const MoreMenu({
     super.key,
     required this.onAddDevice,
+    required this.onLogs,
     required this.onCheckUpdate,
     required this.onAbout,
     this.showSettings = false,
@@ -13,6 +14,7 @@ class MoreMenu extends StatelessWidget {
   });
 
   final VoidCallback onAddDevice;
+  final VoidCallback onLogs;
   final VoidCallback onCheckUpdate;
   final VoidCallback onAbout;
   final bool showSettings;
@@ -35,6 +37,12 @@ class MoreMenu extends StatelessWidget {
           label: prefs.t('app.settings'),
           onSelected: onSettings!,
         ),
+      _MoreEntry(
+        value: 'logs',
+        icon: Icons.receipt_long_outlined,
+        label: prefs.t('app.logs'),
+        onSelected: onLogs,
+      ),
       _MoreEntry(
         value: 'checkUpdate',
         icon: Icons.system_update_alt,

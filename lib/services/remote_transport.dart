@@ -98,10 +98,22 @@ class WebSocketRelayTransport implements RemoteTransport {
     };
     return base.replace(
       scheme: scheme,
-      path: '/ws/client',
-      queryParameters: {'deviceId': device.deviceId, 'token': device.token},
+      path: _joinRemotePath(base.path, '/ws/client'),
+      queryParameters: {
+        'hostId': device.hostId,
+        'deviceId': device.deviceId,
+        if (device.token.trim().isNotEmpty) 'token': device.token,
+      },
     );
   }
+}
+
+String _joinRemotePath(String basePath, String path) {
+  var base = basePath.trim().replaceAll(RegExp(r'/+$'), '');
+  if (base.isEmpty) base = '/v3';
+  final suffix = path.trim().replaceFirst(RegExp(r'^/+'), '');
+  if (suffix.isEmpty) return base;
+  return '$base/$suffix';
 }
 
 class WebRtcTransport implements RemoteTransport {
@@ -112,6 +124,7 @@ class WebRtcTransport implements RemoteTransport {
   RTCDataChannel? _dataChannel;
   bool _closed = false;
   bool _directReady = false;
+  bool _relayReady = false;
 
   @override
   String get kind => RemoteTransportKind.webRtc;
@@ -128,6 +141,7 @@ class WebRtcTransport implements RemoteTransport {
     await close();
     _closed = false;
     _directReady = false;
+    _relayReady = false;
     _relay
       ..onState = _handleRelayState
       ..onEnvelope = _handleRelayEnvelope;
@@ -151,6 +165,7 @@ class WebRtcTransport implements RemoteTransport {
   Future<void> close() async {
     _closed = true;
     _directReady = false;
+    _relayReady = false;
     final channel = _dataChannel;
     final peerConnection = _peerConnection;
     _dataChannel = null;
@@ -162,12 +177,14 @@ class WebRtcTransport implements RemoteTransport {
   }
 
   void _handleRelayState(String state) {
-    if (state == 'connected:path=relay' && !_directReady) {
-      _onState?.call(state);
+    if (state == 'connected:path=relay') {
+      _relayReady = true;
+      if (!_directReady) _onState?.call(state);
       return;
     }
     if (state == 'closed' || state.startsWith('failed:')) {
-      _onState?.call(state);
+      _relayReady = false;
+      if (!_directReady) _onState?.call(state);
       return;
     }
     if (!_directReady) _onState?.call(state);
@@ -200,8 +217,6 @@ class WebRtcTransport implements RemoteTransport {
           _markDirectReady();
         } else if (state ==
                 RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-            state ==
-                RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
             state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
           _markRelayFallback();
         }
@@ -287,7 +302,7 @@ class WebRtcTransport implements RemoteTransport {
     if (_closed) return;
     if (_directReady) {
       _directReady = false;
-      _onState?.call('connected:path=relay');
+      _onState?.call(_relayReady ? 'connected:path=relay' : 'closed');
     }
   }
 }

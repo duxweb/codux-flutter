@@ -11,8 +11,10 @@ class SettingsScreen extends StatelessWidget {
     required this.bottomInset,
     required this.currentAccent,
     required this.currentLocale,
+    required this.currentLogLevel,
     required this.onChangeAccent,
     required this.onChangeLocale,
+    required this.onChangeLogLevel,
     required this.onUseDetectedName,
     required this.onSave,
     required this.onBack,
@@ -24,8 +26,10 @@ class SettingsScreen extends StatelessWidget {
   final double bottomInset;
   final AccentOption currentAccent;
   final LocaleOption currentLocale;
+  final String currentLogLevel;
   final ValueChanged<AccentOption> onChangeAccent;
   final ValueChanged<LocaleOption> onChangeLocale;
+  final ValueChanged<String> onChangeLogLevel;
   final VoidCallback onUseDetectedName;
   final VoidCallback onSave;
   final VoidCallback onBack;
@@ -101,6 +105,24 @@ class SettingsScreen extends StatelessWidget {
                     ),
                   ],
                 ),
+                const SizedBox(height: AppSpacing.l),
+                _SectionLabel(prefs.t('settings.logLevelLabel')),
+                _Card(
+                  children: [
+                    _PickerTile(
+                      label: prefs.t('settings.logLevelLabel'),
+                      value: prefs.t('logLevel.$currentLogLevel'),
+                      onTap: () => _showLogLevelPicker(
+                        context,
+                        accent: accent,
+                        current: currentLogLevel,
+                        title: prefs.t('settings.logLevelLabel'),
+                        cancelLabel: prefs.t('app.cancel'),
+                        onSelect: onChangeLogLevel,
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: AppSpacing.xl),
                 _PrimaryButton(
                   label: prefs.t('settings.save'),
@@ -114,6 +136,129 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+const _logLevels = ['warn', 'info', 'debug'];
+
+void _showLogLevelPicker(
+  BuildContext context, {
+  required Color accent,
+  required String current,
+  required String title,
+  required String cancelLabel,
+  required ValueChanged<String> onSelect,
+}) {
+  final prefs = AppPreferences.of(context);
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    barrierColor: AppColors.backdrop,
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.s),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: AppColors.bgSurface,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  Container(
+                    height: 48,
+                    alignment: Alignment.center,
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: AppTextSize.body,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const Divider(
+                    color: AppColors.border,
+                    height: 0.5,
+                    thickness: 0.5,
+                  ),
+                  for (final level in _logLevels) ...[
+                    InkWell(
+                      onTap: () {
+                        onSelect(level);
+                        Navigator.of(ctx).pop();
+                      },
+                      child: Container(
+                        height: 56,
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.l,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                prefs.t('logLevel.$level'),
+                                style: TextStyle(
+                                  color: level == current
+                                      ? accent
+                                      : AppColors.textPrimary,
+                                  fontSize: AppTextSize.title,
+                                  fontWeight: level == current
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            if (level == current)
+                              Icon(Icons.check, color: accent),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (level != _logLevels.last)
+                      const Divider(
+                        color: AppColors.border,
+                        height: 0.5,
+                        thickness: 0.5,
+                      ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.s),
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: AppColors.bgSurface,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () => Navigator.pop(ctx),
+                child: Container(
+                  height: 56,
+                  alignment: Alignment.center,
+                  child: Text(
+                    cancelLabel,
+                    style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: AppTextSize.title,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 void _showLocalePicker(

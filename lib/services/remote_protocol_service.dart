@@ -1,5 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'dart:io';
 import '../i18n.dart';
 import '../models/remote_models.dart';
 import 'e2e_crypto.dart';
@@ -7,9 +8,10 @@ import 'e2e_crypto.dart';
 const String remoteProtocolVersion = 'v3.0';
 
 Future<PairingPayload> parsePairingPayload(String input) async {
-  final parsed = _decodePairingPayload(input);
+  final parsed = await _fetchPairingTicketPayload(input);
   final code = parsed['code']?.toString();
   final secret = parsed['secret']?.toString();
+  final hostId = parsed['hostId']?.toString();
   final hostPublicKey = parsed['hostPublicKey']?.toString() ?? '';
   final cryptoVersion = parsed['cryptoVersion'] is num
       ? (parsed['cryptoVersion'] as num).toInt()
@@ -23,6 +25,7 @@ Future<PairingPayload> parsePairingPayload(String input) async {
   final missingFields = <String>[
     if (code == null || code.isEmpty) 'code',
     if (secret == null || secret.isEmpty) 'secret',
+    if (hostId == null || hostId.isEmpty) 'hostId',
     if (parsed['pairingId']?.toString().trim().isEmpty != false) 'pairingId',
     if (hostPublicKey.isEmpty) 'hostPublicKey',
     if (cryptoVersion < 1) 'cryptoVersion',
@@ -50,6 +53,7 @@ Future<PairingPayload> parsePairingPayload(String input) async {
     ),
     cryptoVersion: cryptoVersion,
     hostName: parsed['hostName']?.toString(),
+    hostId: hostId,
     transports: transports,
     pairingId: parsed['pairingId']?.toString(),
   );
@@ -61,33 +65,41 @@ List<RemoteTransportCandidate> _normalizedPairingTransports(
   return remoteTransportCandidatesFromJson(parsed['transports']);
 }
 
-Map<String, dynamic> _decodePairingPayload(String input) {
+Future<Map<String, dynamic>> _fetchPairingTicketPayload(String input) async {
   final value = input.trim();
   if (value.isEmpty) {
     throw Exception(tr('remote.qrEmpty', LocaleChoices.system.id));
   }
-  for (final candidate in [value, _tryBase64Decode(value)]) {
-    if (candidate == null || candidate.isEmpty) continue;
-    try {
-      final decoded = jsonDecode(candidate);
-      if (decoded is Map<String, dynamic>) return decoded;
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
-    } catch (_) {}
+  final uri = Uri.tryParse(value);
+  if (uri == null ||
+      uri.scheme != 'codux' ||
+      uri.host != 'pair' ||
+      uri.queryParameters['server']?.trim().isEmpty != false ||
+      uri.queryParameters['ticket']?.trim().isEmpty != false) {
+    throw Exception(tr('remote.qrInvalid', LocaleChoices.system.id));
   }
+  final server = uri.queryParameters['server']!.trim();
+  final ticket = uri.queryParameters['ticket']!.trim();
+  final response = await HttpClient()
+      .getUrl(_pairingTicketUri(server, ticket))
+      .then((request) => request.close())
+      .timeout(const Duration(seconds: 12));
+  final text = await response.transform(utf8.decoder).join();
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw Exception(tr('remote.qrInvalid', LocaleChoices.system.id));
+  }
+  final decoded = jsonDecode(text);
+  if (decoded is Map<String, dynamic>) return decoded;
+  if (decoded is Map) return Map<String, dynamic>.from(decoded);
   throw Exception(tr('remote.qrInvalid', LocaleChoices.system.id));
 }
 
-String? _tryBase64Decode(String value) {
-  final normalized = value
-      .replaceFirst(RegExp(r'^codux://pair\?data='), '')
-      .replaceFirst(RegExp(r'^codux-pair:'), '');
-  try {
-    return utf8.decode(base64Url.decode(base64Url.normalize(normalized)));
-  } catch (_) {}
-  try {
-    return utf8.decode(base64.decode(base64.normalize(normalized)));
-  } catch (_) {}
-  return null;
+Uri _pairingTicketUri(String base, String ticket) {
+  final baseUri = Uri.parse(base.trim());
+  return baseUri.replace(
+    path: _joinRemotePath(baseUri.path, '/api/tickets/$ticket'),
+    query: '',
+  );
 }
 
 RelayEnvelope pairingRequestEnvelope(PairingPayload payload, String name) {
@@ -111,7 +123,6 @@ RelayEnvelope pairingRequestEnvelope(PairingPayload payload, String name) {
 Future<StoredDevice> claimPairingOverRelay({
   required PairingPayload payload,
   required String name,
-  http.Client? client,
   Duration timeout = const Duration(seconds: 90),
 }) async {
   RemoteTransportCandidate? transport;
@@ -125,66 +136,63 @@ Future<StoredDevice> claimPairingOverRelay({
   if (transport == null) {
     throw Exception(tr('remote.qrMissingFields', LocaleChoices.system.id));
   }
-  final httpClient = client ?? http.Client();
-  final ownsClient = client == null;
+  final socket = await WebSocket.connect(
+    _pairingWebSocketUri(transport.url, payload).toString(),
+  ).timeout(const Duration(seconds: 12));
   try {
-    await _postJson(httpClient, transport.url, '/api/pairings/claim', {
-      'code': payload.code,
-      'secret': payload.secret,
-      'name': name,
-      'publicKey': payload.devicePublicKey,
-    });
-    final deadline = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(deadline)) {
-      final status = await _postJson(
-        httpClient,
-        transport.url,
-        '/api/pairings/status',
-        {'code': payload.code, 'secret': payload.secret},
-      );
-      final state = '${status['status'] ?? ''}';
-      if (state == 'confirmed') {
-        return confirmedDevice(
-          payload: payload,
-          name: name,
-          confirmed: RelayEnvelope(type: 'pairing.confirmed', payload: status),
-        );
-      }
-      if (state == 'rejected') throw const PairingRejectedException();
-      await Future<void>.delayed(const Duration(milliseconds: 800));
+    socket.add(jsonEncode(pairingRequestEnvelope(payload, name).toJson()));
+    final message = await socket
+        .where((raw) => raw is String)
+        .map((raw) {
+          try {
+            final decoded = jsonDecode(raw as String);
+            if (decoded is Map) {
+              return RelayEnvelope.fromJson(Map<String, dynamic>.from(decoded));
+            }
+          } catch (_) {}
+          return const RelayEnvelope(type: '');
+        })
+        .where(
+          (message) =>
+              message.type == 'pairing.confirmed' ||
+              message.type == 'pairing.rejected',
+        )
+        .first
+        .timeout(timeout);
+    if (message.type == 'pairing.rejected') {
+      throw const PairingRejectedException();
     }
+    return confirmedDevice(payload: payload, name: name, confirmed: message);
+  } on TimeoutException {
     throw Exception(tr('remote.waitTimeout', LocaleChoices.system.id));
   } finally {
-    if (ownsClient) httpClient.close();
+    await socket.close();
   }
 }
 
-Future<Map<String, dynamic>> _postJson(
-  http.Client client,
-  String base,
-  String path,
-  Map<String, dynamic> body,
-) async {
-  final uri = Uri.parse(base.trim()).replace(path: path, queryParameters: null);
-  final response = await client
-      .post(
-        uri,
-        headers: const {'content-type': 'application/json'},
-        body: jsonEncode(body),
-      )
-      .timeout(const Duration(seconds: 12));
-  final decoded = response.body.isEmpty
-      ? <String, dynamic>{}
-      : jsonDecode(response.body);
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    if (decoded is Map && decoded['error'] != null) {
-      throw Exception(decoded['error']);
-    }
-    throw Exception('HTTP ${response.statusCode}');
-  }
-  if (decoded is Map<String, dynamic>) return decoded;
-  if (decoded is Map) return Map<String, dynamic>.from(decoded);
-  return <String, dynamic>{};
+Uri _pairingWebSocketUri(String base, PairingPayload payload) {
+  final baseUri = Uri.parse(base.trim());
+  final scheme = switch (baseUri.scheme) {
+    'https' => 'wss',
+    'http' => 'ws',
+    final other => other,
+  };
+  return baseUri.replace(
+    scheme: scheme,
+    path: _joinRemotePath(baseUri.path, '/ws/client'),
+    queryParameters: {
+      'hostId': payload.hostId ?? '',
+      'deviceId': payload.devicePublicKey,
+    },
+  );
+}
+
+String _joinRemotePath(String basePath, String path) {
+  var base = basePath.trim().replaceAll(RegExp(r'/+$'), '');
+  if (base.isEmpty) base = '/v3';
+  final suffix = path.trim().replaceFirst(RegExp(r'^/+'), '');
+  if (suffix.isEmpty) return base;
+  return '$base/$suffix';
 }
 
 StoredDevice confirmedDevice({

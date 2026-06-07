@@ -9,6 +9,7 @@ class PairingPayload {
     required this.transports,
     this.cryptoVersion = 1,
     this.hostName,
+    this.hostId,
     this.pairingId,
   });
   final String code;
@@ -20,6 +21,7 @@ class PairingPayload {
   final List<RemoteTransportCandidate> transports;
   final int cryptoVersion;
   final String? hostName;
+  final String? hostId;
   final String? pairingId;
 
   RemoteTransportCandidate get transport =>
@@ -660,20 +662,24 @@ class MobileSettings {
     required this.localName,
     this.accentId = 'cyan',
     this.localeId = 'system',
+    this.logLevel = 'info',
   });
   final String localName;
   final String accentId;
   final String localeId;
+  final String logLevel;
 
   MobileSettings copyWith({
     String? localName,
     String? accentId,
     String? localeId,
+    String? logLevel,
   }) {
     return MobileSettings(
       localName: localName ?? this.localName,
       accentId: accentId ?? this.accentId,
       localeId: localeId ?? this.localeId,
+      logLevel: logLevel ?? this.logLevel,
     );
   }
 
@@ -681,11 +687,13 @@ class MobileSettings {
     localName: '${json['localName'] ?? ''}',
     accentId: '${json['accentId'] ?? 'cyan'}',
     localeId: '${json['localeId'] ?? 'system'}',
+    logLevel: '${json['logLevel'] ?? 'info'}',
   );
 
   Map<String, dynamic> toJson() => {
     'localName': localName,
     'accentId': accentId,
     'localeId': localeId,
+    'logLevel': logLevel,
   };
 }

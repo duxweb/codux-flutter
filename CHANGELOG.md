@@ -4,6 +4,31 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-06-08
+
+### Added
+
+- Added the official v3 remote protocol for Codux Mobile, sharing the same relay/WebRTC model as Codux Desktop.
+- Added stateless QR ticket pairing so the desktop can publish a short-lived pairing payload through the relay service.
+- Added WebRTC DataChannel direct transport with WebSocket relay fallback, plus latency reporting based on protocol ping/pong.
+- Added in-app debug logs with copy/export support and configurable log verbosity for connection and terminal diagnostics.
+
+### Changed
+
+- Standardized project list, terminal list, host info, transport status, and reconnect behavior around one remote protocol state machine.
+- Reworked first-load synchronization so connection, hello, and transport path events actively request host info, project list, terminal list, and terminal buffers.
+- Replayed native terminal buffers when the controller is created or resized so restored sessions do not open as a blank terminal.
+
+### Fixed
+
+- Fixed first entry after pairing or app restart showing an empty terminal until the user manually switched projects.
+- Fixed background/foreground reconnect status flicker, missing latency display, and stale relay/P2P labels during transport changes.
+- Fixed duplicate terminal buffer requests and replay ordering around project switching and split selection.
+
+### Notes
+
+- Codux Mobile 1.7.0 should be paired with Codux Desktop 1.7.0. Existing paired devices should be paired again after upgrading.
+
 ## [1.7.0-beta.1] - 2026-06-07
 
 ### Changed
