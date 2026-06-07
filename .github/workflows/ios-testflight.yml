@@ -60,16 +60,6 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: plugin/codux_remote_iroh/rust -> target
-
       - name: Resolve build metadata
         id: meta
         shell: bash
@@ -164,9 +154,6 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
-
-      - name: Build iOS Iroh bridge
-        run: bash scripts/build-ios-iroh-bridge.sh
 
       - name: Analyze
         run: flutter analyze

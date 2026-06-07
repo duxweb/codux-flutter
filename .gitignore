@@ -54,8 +54,3 @@ android/local.properties
 /android/key.properties
 /android/app/*.jks
 /android/app/*.keystore
-
-# Local native build outputs for bundled plugins
-plugin/codux_remote_iroh/rust/target/
-plugin/codux_remote_iroh/ios/Rust/CoduxRemoteIrohBridge.xcframework/
-plugin/codux_remote_iroh/ios/Rust/Headers/
