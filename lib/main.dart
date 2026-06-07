@@ -241,6 +241,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _latencyProbeTimer;
   Timer? _pingTimeoutTimer;
   Timer? _backgroundDisconnectTimer;
+  Timer? _irohUpgradeTimer;
   int _projectListRetryAttempt = 0;
   int _terminalListRetryAttempt = 0;
   double? _edgeBackDragStartX;
@@ -258,6 +259,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _connectionGraceTimer;
   String? _lastIrohUpgradeSignature;
   DateTime? _lastIrohUpgradeAttemptAt;
+  IrohNodeAddr? _latestHostIrohNodeAddr;
+  bool _irohDirectPathSeen = false;
 
   bool get _isConnected => _irohReady && _transportReady;
   bool get _isHostReady =>
@@ -708,6 +711,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _latencyProbeTimer?.cancel();
     _pingTimeoutTimer?.cancel();
     _backgroundDisconnectTimer?.cancel();
+    _irohUpgradeTimer?.cancel();
     _toastTimer?.cancel();
     _filePickerTimeoutTimer?.cancel();
     _projectListRetryTimer?.cancel();
@@ -1039,7 +1043,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
   }
 
-  void _connect([StoredDevice? device, bool background = false]) {
+  void _connect([
+    StoredDevice? device,
+    bool background = false,
+    IrohNodeAddr? freshDialNodeAddr,
+  ]) {
     final target = device ?? _activeDevice;
     if (target == null) {
       setState(() => _showScanner = true);
@@ -1059,10 +1067,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
     _cancelHostResponseProbe();
     _reconnectTimer?.cancel();
+    _irohUpgradeTimer?.cancel();
     _healthTimer?.cancel();
     _clearLatencyProbe();
     unawaited(_irohTransport.close());
     _irohReady = false;
+    _latestHostIrohNodeAddr = null;
+    _irohDirectPathSeen = false;
     _sendSeq = DateTime.now().microsecondsSinceEpoch;
     _receiveSeq = 0;
     _sendChain = Future<void>.value();
@@ -1102,13 +1113,16 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _activeDevice = target;
     });
     unawaited(_restoreCachedProjects(target));
-    final nodeAddr = stableIrohNodeAddr(target.iroh);
-    if (target.transport != 'iroh' || nodeAddr == null) {
+    final storedNodeAddr = stableIrohNodeAddr(target.iroh);
+    if (target.transport != 'iroh' || storedNodeAddr == null) {
       setState(() => _status = _t('pair.repairRequired'));
       return;
     }
+    final nodeAddr = freshDialNodeAddr == null
+        ? _irohStableDialNodeAddr(storedNodeAddr)
+        : stableIrohNodeAddr(freshDialNodeAddr)!;
     CoduxLog.info(
-      '[codux-flutter-iroh] dial nodeId=${nodeAddr.nodeId} relay=${nodeAddr.relayUrl ?? ''} direct=${nodeAddr.directAddresses.length}',
+      '[codux-flutter-iroh] dial nodeId=${nodeAddr.nodeId} relay=${nodeAddr.relayUrl ?? ''} direct=${nodeAddr.directAddresses.length} storedDirect=${storedNodeAddr.directAddresses.length} fresh=${freshDialNodeAddr != null}',
     );
     _irohTransport.connect(nodeAddr: nodeAddr.toJson()).catchError((
       Object error,
@@ -1426,7 +1440,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
                 iroh: iroh,
               );
             }
-            _maybeReconnectForIrohDirectAddress(updatedDevice ?? target, iroh);
+            if (iroh != null) {
+              _latestHostIrohNodeAddr = iroh;
+              _evaluateIrohRelayUpgrade(updatedDevice ?? target);
+            }
           }
           _markRemoteProtocolReady(
             force: !_projectListLoaded || !_terminalListLoaded,
@@ -1714,6 +1731,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           if (changed) _latencyMs = null;
         });
         if (path == 'direct') {
+          _irohDirectPathSeen = true;
           _lastIrohUpgradeSignature = null;
           _lastIrohUpgradeAttemptAt = null;
         }
@@ -1721,7 +1739,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           _sendTransportPing();
           final device = _activeDevice;
           if (device != null) {
-            _maybeReconnectForIrohDirectAddress(device, device.iroh);
+            _evaluateIrohRelayUpgrade(device);
           }
         }
       }
@@ -1855,19 +1873,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     return addr;
   }
 
-  void _maybeReconnectForIrohDirectAddress(
-    StoredDevice device,
-    IrohNodeAddr? addr,
-  ) {
+  void _evaluateIrohRelayUpgrade(StoredDevice device) {
+    if (_irohDirectPathSeen) return;
+    final addr = _latestHostIrohNodeAddr;
     if (addr == null || addr.directAddresses.isEmpty) return;
+    if (!_irohReady || !_transportReady) return;
     if (_irohConnectionPath != 'relay' && _irohConnectionPath != 'mixed') {
       return;
     }
-    final signature = [
-      addr.nodeId,
-      addr.relayUrl ?? '',
-      ...(addr.directAddresses.toSet().toList()..sort()),
-    ].join('|');
+    final signature = _irohNodeAddrSignature(addr);
     final now = DateTime.now();
     final lastAttemptAt = _lastIrohUpgradeAttemptAt;
     if (_lastIrohUpgradeSignature == signature &&
@@ -1875,19 +1889,29 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         now.difference(lastAttemptAt) < const Duration(minutes: 2)) {
       return;
     }
-    _lastIrohUpgradeSignature = signature;
-    _lastIrohUpgradeAttemptAt = now;
-    CoduxLog.info(
-      '[codux-flutter-iroh] reconnect for direct candidates direct=${addr.directAddresses.length} path=$_irohConnectionPath',
-    );
-    Future<void>.delayed(const Duration(milliseconds: 120), () {
-      if (!mounted || _disposing) return;
+    _irohUpgradeTimer?.cancel();
+    _irohUpgradeTimer = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted || _disposing || !_appInForeground || _appSuspended) return;
       if (_activeDevice?.deviceId != device.deviceId) return;
       if (_irohConnectionPath != 'relay' && _irohConnectionPath != 'mixed') {
         return;
       }
-      _connect(device, true);
+      _lastIrohUpgradeSignature = signature;
+      _lastIrohUpgradeAttemptAt = DateTime.now();
+      CoduxLog.info(
+        '[codux-flutter-iroh] upgrade reconnect path=$_irohConnectionPath direct=${addr.directAddresses.length}',
+      );
+      _connect(device, true, addr);
     });
+  }
+
+  IrohNodeAddr _irohStableDialNodeAddr(IrohNodeAddr addr) {
+    return IrohNodeAddr(nodeId: addr.nodeId, relayUrl: addr.relayUrl);
+  }
+
+  String _irohNodeAddrSignature(IrohNodeAddr addr) {
+    final direct = addr.directAddresses.toSet().toList()..sort();
+    return [addr.nodeId, addr.relayUrl ?? '', ...direct].join('|');
   }
 
   void _handleIrohClosed(String reason) {

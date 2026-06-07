@@ -4,6 +4,14 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-06-07
+
+### Fixed
+
+- Ignore stored Iroh direct addresses during normal reconnects and dial with stable node identity plus relay only.
+- Use fresh `host.info` direct addresses only for controlled relay-to-direct upgrade reconnects.
+- Prevent repeated relay upgrade reconnects after a session has already reached a direct path.
+
 ## [1.6.4] - 2026-06-06
 
 ### Fixed

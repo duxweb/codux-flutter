@@ -127,10 +127,40 @@ void main() {
         },
       },
     });
+    await _pumpUntil(tester, () => bridge.addedNodeAddrs.isNotEmpty);
     await _pumpUntil(tester, () => bridge.sessions.length > 1);
 
     expect(bridge.sessions.length, 2);
     expect(bridge.sessions.first.closed, isTrue);
+    expect(
+      bridge.connectConfigs.last['nodeAddr'],
+      containsPair('directAddresses', ['203.0.113.1:12345']),
+    );
+  });
+
+  testWidgets('stored direct addresses are ignored for normal reconnect', (
+    tester,
+  ) async {
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(
+      tester,
+      bridge,
+      devices: [
+        _device().copyWith(
+          iroh: const IrohNodeAddr(
+            nodeId: 'node-1',
+            relayUrl: 'https://relay.iroh.network',
+            directAddresses: ['198.51.100.1:12345'],
+          ),
+        ),
+      ],
+    );
+    await _pumpUntil(tester, () => bridge.sessions.isNotEmpty);
+
+    expect(bridge.connectConfigs.single['nodeAddr'], {
+      'nodeId': 'node-1',
+      'relayUrl': 'https://relay.iroh.network',
+    });
   });
 
   testWidgets('device can dial with node id only when no address hints exist', (
@@ -211,7 +241,7 @@ void main() {
     },
   );
 
-  testWidgets('relay path reconnects after earlier host info address update', (
+  testWidgets('relay path after host info direct address reconnects once', (
     tester,
   ) async {
     final bridge = _FakeIrohBridge();
@@ -238,6 +268,37 @@ void main() {
 
     expect(bridge.sessions.length, 2);
     expect(bridge.sessions.first.closed, isTrue);
+  });
+
+  testWidgets('relay fallback after direct path keeps the current transport', (
+    tester,
+  ) async {
+    final bridge = _FakeIrohBridge();
+    await _pumpApp(tester, bridge);
+    await _pumpUntil(tester, () => bridge.sessions.isNotEmpty);
+    final session = bridge.sessions.single;
+    session.emitState('connected');
+    session.emitEnvelope({
+      'type': 'host.info',
+      'payload': {
+        'name': 'Mac',
+        'protocolVersion': 'v2.0',
+        'iroh': {
+          'nodeId': 'node-1',
+          'relayUrl': 'https://relay.iroh.network',
+          'directAddresses': ['203.0.113.1:12345'],
+        },
+      },
+    });
+    await _pumpUntil(tester, () => bridge.addedNodeAddrs.isNotEmpty);
+
+    session.emitPath('direct');
+    await tester.pump();
+    session.emitPath('relay');
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(bridge.sessions.length, 1);
+    expect(session.closed, isFalse);
   });
 
   testWidgets('iroh close reconnects through iroh', (tester) async {
@@ -392,9 +453,11 @@ final class _FakeIrohBridge implements CoduxRemoteIrohBridge {
   final bool autoConnected;
   final sessions = <_FakeIrohSession>[];
   final addedNodeAddrs = <Map<String, dynamic>>[];
+  final connectConfigs = <Map<String, dynamic>>[];
 
   @override
   int connect(Map<String, dynamic> config) {
+    connectConfigs.add(config);
     final session = _FakeIrohSession(sessions.length + 1);
     sessions.add(session);
     if (autoConnected) {
