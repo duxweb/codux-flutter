@@ -4,6 +4,12 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.6.7] - 2026-06-07
+
+### Fixed
+
+- Added the Android `INTERNET` permission to the main release manifest so packaged builds can use the Iroh network transport like debug builds.
+
 ## [1.6.6] - 2026-06-07
 
 ### Fixed

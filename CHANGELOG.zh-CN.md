@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.6.7] - 2026-06-07
+
+### 修复
+
+- 将 Android `INTERNET` 权限加入 main release Manifest，确保正式打包版本和 debug 版本一样可以使用 Iroh 网络传输。
+
 ## [1.6.6] - 2026-06-07
 
 ### 修复
