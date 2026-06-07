@@ -163,7 +163,8 @@ class _DeviceRow extends StatelessWidget {
 String _deviceProtocolLabel(BuildContext context, String transport) {
   final prefs = AppPreferences.of(context);
   return switch (transport.toLowerCase()) {
-    'iroh' => prefs.t('connection.protocol.irohQuic'),
+    'websocketrelay' => prefs.t('connection.protocol.relay'),
+    'webrtc' => prefs.t('connection.protocol.webrtc'),
     _ => transport.toUpperCase(),
   };
 }

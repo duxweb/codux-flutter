@@ -1,63 +1,131 @@
 class PairingPayload {
   const PairingPayload({
-    required this.server,
     required this.code,
     required this.secret,
     required this.hostPublicKey,
     required this.devicePrivateKey,
     required this.devicePublicKey,
     required this.matchCode,
+    required this.transports,
     this.cryptoVersion = 1,
     this.hostName,
-    this.transport = 'iroh',
-    this.iroh,
     this.pairingId,
   });
-  final String server;
   final String code;
   final String secret;
   final String hostPublicKey;
   final String devicePrivateKey;
   final String devicePublicKey;
   final String matchCode;
+  final List<RemoteTransportCandidate> transports;
   final int cryptoVersion;
   final String? hostName;
-  final String transport;
-  final IrohNodeAddr? iroh;
   final String? pairingId;
+
+  RemoteTransportCandidate get transport =>
+      preferredTransport ??
+      const RemoteTransportCandidate(kind: RemoteTransportKind.websocketRelay);
+
+  RemoteTransportCandidate? get preferredTransport {
+    for (final candidate in transports) {
+      if (candidate.kind == RemoteTransportKind.websocketRelay &&
+          candidate.url.trim().isNotEmpty) {
+        return candidate;
+      }
+    }
+    for (final candidate in transports) {
+      if (candidate.kind == RemoteTransportKind.webRtc &&
+          candidate.url.trim().isNotEmpty) {
+        return candidate;
+      }
+    }
+    return transports.isEmpty ? null : transports.first;
+  }
 }
 
-class IrohNodeAddr {
-  const IrohNodeAddr({
-    required this.nodeId,
-    this.relayUrl,
-    this.directAddresses = const [],
+abstract final class RemoteTransportKind {
+  static const websocketRelay = 'websocketRelay';
+  static const webRtc = 'webRtc';
+}
+
+class RemoteTransportCandidate {
+  const RemoteTransportCandidate({
+    required this.kind,
+    this.role,
+    this.url = '',
+    this.iceServers = const [],
   });
 
-  final String nodeId;
-  final String? relayUrl;
-  final List<String> directAddresses;
+  final String kind;
+  final String? role;
+  final String url;
+  final List<RemoteIceServer> iceServers;
 
-  factory IrohNodeAddr.fromJson(Map<String, dynamic> json) => IrohNodeAddr(
-    nodeId: '${json['nodeId'] ?? ''}',
-    relayUrl: json['relayUrl']?.toString(),
-    directAddresses: (json['directAddresses'] as List? ?? const [])
-        .map((item) => '$item')
-        .where((item) => item.isNotEmpty)
-        .toList(),
-  );
-
-  IrohNodeAddr stable() => IrohNodeAddr(
-    nodeId: nodeId,
-    relayUrl: relayUrl,
-    directAddresses: directAddresses.toSet().toList(),
-  );
+  factory RemoteTransportCandidate.fromJson(Map<String, dynamic> json) =>
+      RemoteTransportCandidate(
+        kind: '${json['kind'] ?? json['transport'] ?? ''}',
+        role: json['role']?.toString(),
+        url: '${json['url'] ?? ''}',
+        iceServers: remoteIceServersFromJson(json['iceServers']),
+      );
 
   Map<String, dynamic> toJson() => {
-    'nodeId': nodeId,
-    if (relayUrl != null && relayUrl!.isNotEmpty) 'relayUrl': relayUrl,
-    if (directAddresses.isNotEmpty) 'directAddresses': directAddresses,
+    'kind': kind,
+    if (role != null) 'role': role,
+    if (url.isNotEmpty) 'url': url,
+    if (iceServers.isNotEmpty)
+      'iceServers': iceServers.map((item) => item.toJson()).toList(),
   };
+}
+
+class RemoteIceServer {
+  const RemoteIceServer({required this.urls});
+
+  final List<String> urls;
+
+  factory RemoteIceServer.fromJson(Map<String, dynamic> json) {
+    final value = json['urls'];
+    return RemoteIceServer(
+      urls: value is List
+          ? value
+                .map((item) => '$item')
+                .where((item) => item.trim().isNotEmpty)
+                .toList()
+          : ['${value ?? ''}'].where((item) => item.trim().isNotEmpty).toList(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {'urls': urls};
+}
+
+List<RemoteIceServer> remoteIceServersFromJson(Object? value) {
+  if (value is List) {
+    return value
+        .whereType<Map>()
+        .map(
+          (item) => RemoteIceServer.fromJson(Map<String, dynamic>.from(item)),
+        )
+        .where((item) => item.urls.isNotEmpty)
+        .toList();
+  }
+  return const [];
+}
+
+List<RemoteTransportCandidate> remoteTransportCandidatesFromJson(
+  Object? value,
+) {
+  if (value is List) {
+    return value
+        .whereType<Map>()
+        .map(
+          (item) => RemoteTransportCandidate.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .where((item) => item.kind.trim().isNotEmpty)
+        .toList();
+  }
+  return const [];
 }
 
 class StoredDevice {
@@ -72,8 +140,7 @@ class StoredDevice {
     this.devicePublicKey = '',
     this.cryptoVersion = 0,
     this.hostName,
-    this.transport = 'iroh',
-    this.iroh,
+    this.transports = const [],
   });
   final String server;
   final String hostId;
@@ -85,8 +152,37 @@ class StoredDevice {
   final String devicePublicKey;
   final int cryptoVersion;
   final String? hostName;
-  final String transport;
-  final IrohNodeAddr? iroh;
+  final List<RemoteTransportCandidate> transports;
+
+  String get transport => preferredTransport.kind;
+  RemoteTransportCandidate get preferredTransport {
+    for (final candidate in transports) {
+      if (candidate.kind == RemoteTransportKind.webRtc &&
+          candidate.url.trim().isNotEmpty) {
+        return candidate;
+      }
+    }
+    for (final candidate in transports) {
+      if (candidate.kind == RemoteTransportKind.websocketRelay &&
+          candidate.url.trim().isNotEmpty) {
+        return candidate;
+      }
+    }
+    return transports.isEmpty
+        ? const RemoteTransportCandidate(
+            kind: RemoteTransportKind.websocketRelay,
+          )
+        : transports.first;
+  }
+
+  RemoteTransportCandidate? transportByKind(String kind) {
+    for (final candidate in transports) {
+      if (candidate.kind == kind && candidate.url.trim().isNotEmpty) {
+        return candidate;
+      }
+    }
+    return null;
+  }
 
   StoredDevice copyWith({
     String? server,
@@ -99,8 +195,7 @@ class StoredDevice {
     String? devicePublicKey,
     int? cryptoVersion,
     String? hostName,
-    String? transport,
-    IrohNodeAddr? iroh,
+    List<RemoteTransportCandidate>? transports,
   }) {
     return StoredDevice(
       server: server ?? this.server,
@@ -113,32 +208,31 @@ class StoredDevice {
       devicePublicKey: devicePublicKey ?? this.devicePublicKey,
       cryptoVersion: cryptoVersion ?? this.cryptoVersion,
       hostName: hostName ?? this.hostName,
-      transport: transport ?? this.transport,
-      iroh: iroh ?? this.iroh,
+      transports: transports ?? this.transports,
     );
   }
 
-  factory StoredDevice.fromJson(Map<String, dynamic> json) => StoredDevice(
-    server: '${json['server'] ?? ''}',
-    hostId: '${json['hostId'] ?? ''}',
-    deviceId: '${json['deviceId'] ?? ''}',
-    token: '${json['token'] ?? ''}',
-    name: '${json['name'] ?? ''}',
-    hostPublicKey: '${json['hostPublicKey'] ?? ''}',
-    devicePrivateKey: '${json['devicePrivateKey'] ?? ''}',
-    devicePublicKey: '${json['devicePublicKey'] ?? ''}',
-    cryptoVersion: json['cryptoVersion'] is num
-        ? (json['cryptoVersion'] as num).toInt()
-        : int.tryParse('${json['cryptoVersion'] ?? ''}') ?? 0,
-    hostName: json['hostName'] == null ? null : '${json['hostName']}',
-    transport: '${json['transport'] ?? 'iroh'}',
-    iroh: json['iroh'] is Map
-        ? IrohNodeAddr.fromJson(Map<String, dynamic>.from(json['iroh'] as Map))
-        : null,
-  );
+  factory StoredDevice.fromJson(Map<String, dynamic> json) {
+    final transports = remoteTransportCandidatesFromJson(json['transports']);
+    return StoredDevice(
+      server: '${json['server'] ?? ''}',
+      hostId: '${json['hostId'] ?? ''}',
+      deviceId: '${json['deviceId'] ?? ''}',
+      token: '${json['token'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      hostPublicKey: '${json['hostPublicKey'] ?? ''}',
+      devicePrivateKey: '${json['devicePrivateKey'] ?? ''}',
+      devicePublicKey: '${json['devicePublicKey'] ?? ''}',
+      cryptoVersion: json['cryptoVersion'] is num
+          ? (json['cryptoVersion'] as num).toInt()
+          : int.tryParse('${json['cryptoVersion'] ?? ''}') ?? 0,
+      hostName: json['hostName'] == null ? null : '${json['hostName']}',
+      transports: transports,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
-    'server': server,
+    if (server.isNotEmpty) 'server': server,
     'hostId': hostId,
     'deviceId': deviceId,
     'token': token,
@@ -149,7 +243,7 @@ class StoredDevice {
     if (cryptoVersion > 0) 'cryptoVersion': cryptoVersion,
     if (hostName != null) 'hostName': hostName,
     'transport': transport,
-    if (iroh != null) 'iroh': iroh!.toJson(),
+    'transports': transports.map((item) => item.toJson()).toList(),
   };
 }
 

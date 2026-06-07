@@ -4,6 +4,18 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.7.0-beta.1] - 2026-06-07
+
+### Changed
+
+- Replaced the mobile remote transport with the v3 relay/WebRTC model.
+- Prefer WebRTC DataChannel when a direct path is available and fall back to WebSocket relay when P2P cannot connect.
+- Store transport candidates from pairing payloads so reconnects use the same protocol model as desktop.
+
+### Notes
+
+- This beta requires the updated Codux desktop app and updated Codux relay service. Existing remote devices need to be paired again.
+
 ## [1.6.8] - 2026-06-07
 
 ### Changed

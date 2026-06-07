@@ -16,8 +16,12 @@ void main() {
       deviceId: 'device-1',
       token: 'token',
       name: 'Phone',
-      transport: 'iroh',
-      iroh: IrohNodeAddr(nodeId: 'node-1'),
+      transports: [
+        RemoteTransportCandidate(
+          kind: RemoteTransportKind.websocketRelay,
+          url: 'legacy-a',
+        ),
+      ],
     );
     const sameHostWithDifferentLegacyServer = StoredDevice(
       server: 'legacy-b',
@@ -25,8 +29,12 @@ void main() {
       deviceId: 'device-1',
       token: 'token',
       name: 'Phone',
-      transport: 'iroh',
-      iroh: IrohNodeAddr(nodeId: 'node-1'),
+      transports: [
+        RemoteTransportCandidate(
+          kind: RemoteTransportKind.websocketRelay,
+          url: 'legacy-b',
+        ),
+      ],
     );
 
     await storage.saveCachedProjects(device, const [

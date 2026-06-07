@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.6.8+32
+version: 1.7.0-beta.1+33
 
 environment:
   sdk: ^3.11.5
@@ -42,14 +42,13 @@ dependencies:
   path: ^1.9.1
   codux_native_terminal:
     path: plugin/codux_native_terminal
-  codux_remote_iroh:
-    path: plugin/codux_remote_iroh
   cryptography: ^2.9.0
   sherpa_onnx: ^1.13.0
   record: ^6.2.0
   path_provider: ^2.1.5
   archive: ^4.0.9
   file_picker: ^11.0.2
+  flutter_webrtc: ^1.4.1
 
 dev_dependencies:
   flutter_test:

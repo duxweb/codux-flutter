@@ -1,9 +1,9 @@
 import 'dart:convert';
 
-import 'package:flutter_test/flutter_test.dart';
 import 'package:codux_flutter/models/remote_models.dart';
 import 'package:codux_flutter/services/e2e_crypto.dart';
 import 'package:codux_flutter/services/remote_protocol_service.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('match code uses the shared host and mobile formula', () {
@@ -18,48 +18,63 @@ void main() {
     );
   });
 
-  test('stored device defaults to iroh transport', () {
+  test('stored device reads v3 transport candidates', () {
     final device = StoredDevice.fromJson({
-      'server': '',
+      'server': 'https://codux-service.dux.plus',
       'hostId': 'host-1',
       'deviceId': 'device-1',
       'token': 'token-1',
       'name': 'Phone',
+      'transports': [
+        {
+          'kind': 'websocketRelay',
+          'role': 'host',
+          'url': 'https://codux-service.dux.plus',
+        },
+      ],
     });
 
-    expect(device.transport, 'iroh');
+    expect(device.transport, RemoteTransportKind.websocketRelay);
+    expect(device.preferredTransport.url, 'https://codux-service.dux.plus');
   });
 
   test(
-    'iroh pairing payload and confirmation use protocol transport fields',
+    'v3 pairing payload and confirmation use transport candidates',
     () async {
       final qr = base64Url
           .encode(
             utf8.encode(
               jsonEncode({
-                'transport': 'iroh',
+                'protocolVersion': remoteProtocolVersion,
                 'code': '205503D6',
                 'secret': 'pairing-secret',
                 'pairingId': 'pair-1',
                 'hostPublicKey': 'host-public-key',
                 'cryptoVersion': 1,
                 'hostName': 'Mac',
-                'iroh': {
-                  'nodeId': 'node-1',
-                  'relayUrl': 'https://relay.iroh.network',
-                  'directAddresses': ['127.0.0.1:12345'],
-                },
+                'transports': [
+                  {
+                    'kind': 'websocketRelay',
+                    'role': 'host',
+                    'url': 'https://codux-service.dux.plus',
+                  },
+                  {
+                    'kind': 'webRtc',
+                    'role': 'host',
+                    'url': 'https://codux-service.dux.plus',
+                  },
+                ],
               }),
             ),
           )
           .replaceAll('=', '');
 
       final payload = await parsePairingPayload(qr);
-      expect(payload.transport, 'iroh');
+      expect(payload.transport.kind, RemoteTransportKind.websocketRelay);
       expect(payload.pairingId, 'pair-1');
-      expect(payload.iroh?.nodeId, 'node-1');
+      expect(payload.transport.url, 'https://codux-service.dux.plus');
 
-      final request = irohPairingRequestEnvelope(payload, 'Phone');
+      final request = pairingRequestEnvelope(payload, 'Phone');
       expect(request.type, 'pairing.request');
       expect((request.payload as Map)['pairingId'], 'pair-1');
       expect((request.payload as Map)['deviceName'], 'Phone');
@@ -67,10 +82,8 @@ void main() {
         (request.payload as Map)['devicePublicKey'],
         payload.devicePublicKey,
       );
-      expect((request.payload as Map).containsKey('name'), isFalse);
-      expect((request.payload as Map).containsKey('publicKey'), isFalse);
 
-      final confirmed = irohConfirmedDevice(
+      final confirmed = confirmedDevice(
         payload: payload,
         name: 'Phone',
         confirmed: const RelayEnvelope(
@@ -83,32 +96,38 @@ void main() {
           },
         ),
       );
-      expect(confirmed.transport, 'iroh');
-      expect(confirmed.server, isEmpty);
-      expect(confirmed.iroh?.nodeId, 'node-1');
-      expect(confirmed.iroh?.relayUrl, 'https://relay.iroh.network');
-      expect(confirmed.iroh?.directAddresses, ['127.0.0.1:12345']);
-      expect(confirmed.toJson()['iroh'], {
-        'nodeId': 'node-1',
-        'relayUrl': 'https://relay.iroh.network',
-        'directAddresses': ['127.0.0.1:12345'],
-      });
+      expect(confirmed.transport, RemoteTransportKind.webRtc);
+      expect(confirmed.server, 'https://codux-service.dux.plus');
       expect(confirmed.devicePublicKey, payload.devicePublicKey);
+      expect(confirmed.toJson()['transports'], [
+        {
+          'kind': 'websocketRelay',
+          'role': 'host',
+          'url': 'https://codux-service.dux.plus',
+        },
+        {
+          'kind': 'webRtc',
+          'role': 'host',
+          'url': 'https://codux-service.dux.plus',
+        },
+      ]);
     },
   );
 
-  test('pairing payload rejects non-iroh transport', () async {
+  test('pairing payload rejects missing supported transport', () async {
     final qr = base64Url
         .encode(
           utf8.encode(
             jsonEncode({
-              'transport': 'relay',
+              'protocolVersion': remoteProtocolVersion,
               'code': '205503D6',
               'secret': 'pairing-secret',
               'pairingId': 'pair-1',
               'hostPublicKey': 'host-public-key',
               'cryptoVersion': 1,
-              'iroh': {'nodeId': 'node-1'},
+              'transports': [
+                {'kind': 'webRtc'},
+              ],
             }),
           ),
         )
@@ -122,7 +141,7 @@ void main() {
         .encode(
           utf8.encode(
             jsonEncode({
-              'transport': 'iroh',
+              'protocolVersion': remoteProtocolVersion,
               'code': '205503D6',
               'cryptoVersion': 1,
             }),
@@ -145,31 +164,40 @@ void main() {
               'message',
               contains('hostPublicKey'),
             )
-            .having((error) => error.toString(), 'message', contains('iroh')),
+            .having(
+              (error) => error.toString(),
+              'message',
+              contains('transports.websocketRelay.url'),
+            ),
       ),
     );
   });
 
-  test('iroh confirmation rejects incomplete device credentials', () async {
+  test('confirmation rejects incomplete device credentials', () async {
     final payload = await parsePairingPayload(
       base64Url
           .encode(
             utf8.encode(
               jsonEncode({
-                'transport': 'iroh',
+                'protocolVersion': remoteProtocolVersion,
                 'code': '205503D6',
                 'secret': 'pairing-secret',
                 'pairingId': 'pair-1',
                 'hostPublicKey': 'host-public-key',
                 'cryptoVersion': 1,
-                'iroh': {'nodeId': 'node-1'},
+                'transports': [
+                  {
+                    'kind': 'websocketRelay',
+                    'url': 'https://codux-service.dux.plus',
+                  },
+                ],
               }),
             ),
           )
           .replaceAll('=', ''),
     );
     expect(
-      () => irohConfirmedDevice(
+      () => confirmedDevice(
         payload: payload,
         name: 'Phone',
         confirmed: const RelayEnvelope(

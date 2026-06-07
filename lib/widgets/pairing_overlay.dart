@@ -27,7 +27,7 @@ class PairingOverlay extends StatelessWidget {
         ? payload.hostName!.trim()
         : 'Codux Mac';
     final code = payload.matchCode;
-    final transport = payload.transport.toUpperCase();
+    final transport = payload.transport.kind.toUpperCase();
 
     return Positioned.fill(
       child: GestureDetector(

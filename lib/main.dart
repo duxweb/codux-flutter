@@ -11,7 +11,6 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:codux_remote_iroh/codux_remote_iroh.dart';
 import 'package:codux_native_terminal/codux_native_terminal.dart';
 import 'i18n.dart';
 import 'models/remote_models.dart';
@@ -21,6 +20,7 @@ import 'services/e2e_crypto.dart';
 import 'services/log_service.dart';
 import 'services/local_voice_recognition_service.dart';
 import 'services/remote_protocol_service.dart';
+import 'services/remote_transport.dart';
 import 'services/storage_service.dart';
 import 'services/terminal_buffer_retry.dart';
 import 'services/terminal_input_batcher.dart';
@@ -45,7 +45,7 @@ import 'widgets/terminal_switcher_screen.dart';
 import 'widgets/terminal_transition_mask.dart';
 import 'widgets/toolbar.dart';
 
-const String _remoteProtocolVersion = 'v2.0';
+const String _remoteProtocolVersion = remoteProtocolVersion;
 
 enum _TerminalUploadSource { file, image }
 
@@ -64,9 +64,8 @@ void main() {
 }
 
 class CoduxFlutterApp extends StatefulWidget {
-  const CoduxFlutterApp({super.key, this.irohBridge, this.initialDevices});
+  const CoduxFlutterApp({super.key, this.initialDevices});
 
-  final CoduxRemoteIrohBridge? irohBridge;
   final List<StoredDevice>? initialDevices;
 
   @override
@@ -99,7 +98,6 @@ class _CoduxFlutterAppState extends State<CoduxFlutterApp> {
         child: CoduxHomePage(
           onChangeAccent: _setAccent,
           onChangeLocale: _setLocale,
-          irohBridge: widget.irohBridge,
           initialDevices: widget.initialDevices,
         ),
       ),
@@ -112,13 +110,11 @@ class CoduxHomePage extends StatefulWidget {
     super.key,
     required this.onChangeAccent,
     required this.onChangeLocale,
-    this.irohBridge,
     this.initialDevices,
   });
 
   final ValueChanged<AccentOption> onChangeAccent;
   final ValueChanged<LocaleOption> onChangeLocale;
-  final CoduxRemoteIrohBridge? irohBridge;
   final List<StoredDevice>? initialDevices;
 
   @override
@@ -139,11 +135,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   late final TerminalBufferRetryCoordinator _terminalBufferRetry;
   late final TerminalInputBatcher _terminalInputBatcher;
   late final TerminalUploadSender _terminalUploadSender;
-  late final CoduxRemoteIroh _irohTransport;
   late final LocalVoiceRecognitionService _voiceService;
-  Completer<StoredDevice>? _irohPairingCompleter;
-  String? _irohPairingDeviceName;
-  bool _irohPairingRequestSent = false;
+  RemoteTransport? _activeTransport;
   Completer<void>? _terminalUploadCompletion;
   CoduxNativeTerminalController? _nativeTerminalController;
   String _pendingTerminalOutput = '';
@@ -225,7 +218,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   int _reconnectAttempt = 0;
   bool _appInForeground = true;
 
-  bool _irohReady = false;
+  bool _transportConnected = false;
   int _transportGeneration = 0;
   int _sendSeq = 0;
   int _receiveSeq = 0;
@@ -241,14 +234,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   Timer? _latencyProbeTimer;
   Timer? _pingTimeoutTimer;
   Timer? _backgroundDisconnectTimer;
-  Timer? _irohUpgradeTimer;
+  Timer? _transportCloseTimer;
   int _projectListRetryAttempt = 0;
   int _terminalListRetryAttempt = 0;
   double? _edgeBackDragStartX;
   double _edgeBackDragDeltaX = 0;
   double _edgeBackDragDeltaY = 0;
-  String _lastTransportState = 'iroh';
-  String _irohConnectionPath = 'unknown';
+  String _lastTransportState = RemoteTransportKind.websocketRelay;
+  String _connectionPath = 'unknown';
   DateTime? _lastConnectedAt;
   DateTime? _connectionGraceUntil;
   DateTime? _pingSentAt;
@@ -257,12 +250,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   int _pingSeq = 0;
   int? _latencyMs;
   Timer? _connectionGraceTimer;
-  String? _lastIrohUpgradeSignature;
-  DateTime? _lastIrohUpgradeAttemptAt;
-  IrohNodeAddr? _latestHostIrohNodeAddr;
-  bool _irohDirectPathSeen = false;
 
-  bool get _isConnected => _irohReady && _transportReady;
+  bool get _isConnected => _transportConnected && _transportReady;
   bool get _isHostReady =>
       _isConnected &&
       _hostResponsive &&
@@ -313,18 +302,18 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (!_hostResponsive ||
         !_projectListLoaded ||
         !_terminalListLoaded ||
-        _irohConnectionPath == 'unknown' ||
-        _irohConnectionPath == 'none') {
+        _connectionPath == 'unknown' ||
+        _connectionPath == 'none') {
       return _t('app.connecting');
     }
     return _terminalTransportStatusText;
   }
 
   String get _terminalTransportStatusText {
-    return _irohConnectionPathLabel(_irohConnectionPath);
+    return _connectionPathLabel(_connectionPath);
   }
 
-  String _irohConnectionPathLabel(String path) {
+  String _connectionPathLabel(String path) {
     return switch (path) {
       'direct' => _t('connection.direct'),
       'mixed' => _t('connection.relay'),
@@ -347,7 +336,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _connectionGraceTimer?.cancel();
     _connectionGraceUntil = DateTime.now().add(duration);
     CoduxLog.info(
-      '[codux-flutter-iroh] grace reason=$reason until=${_connectionGraceUntil!.toIso8601String()} transport=$_lastTransportState lastConnectedAt=${_lastConnectedAt?.toIso8601String() ?? 'null'}',
+      '[codux-flutter-remote] grace reason=$reason until=${_connectionGraceUntil!.toIso8601String()} transport=$_lastTransportState lastConnectedAt=${_lastConnectedAt?.toIso8601String() ?? 'null'}',
     );
     _connectionGraceTimer = Timer(duration, () {
       if (!mounted || _disposing) return;
@@ -356,7 +345,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       setState(() {
         _connectionGraceUntil = null;
       });
-      CoduxLog.info('[codux-flutter-iroh] grace expired reason=$reason');
+      CoduxLog.info('[codux-flutter-remote] grace expired reason=$reason');
     });
   }
 
@@ -407,7 +396,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   void _failRemoteProtocol(StoredDevice target, Object? payload) {
     final version = payload is Map ? '${payload['protocolVersion'] ?? ''}' : '';
     CoduxLog.warn(
-      '[codux-flutter-iroh] incompatible protocol expected=$_remoteProtocolVersion received=$version host=${target.hostId} device=${target.deviceId}',
+      '[codux-flutter-remote] incompatible protocol expected=$_remoteProtocolVersion received=$version host=${target.hostId} device=${target.deviceId}',
     );
     _shouldReconnect = false;
     final shouldPrompt = _protocolBlockedHostIds.add(target.hostId);
@@ -416,8 +405,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _cancelHostResponseProbe();
     _clearConnectionGrace();
     _clearLatencyProbe();
-    _irohReady = false;
-    unawaited(_irohTransport.close());
+    _transportConnected = false;
+    unawaited(_closeActiveTransport());
     _terminalInputBatcher.reset();
     _clearPendingTerminalInputs();
     final message = _t('connection.upgradeRequired');
@@ -456,9 +445,13 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     final wasResponsive = _hostResponsive;
     _hostResponsive = true;
     _cancelHostResponseProbe();
-    _markTransportConnected(transport ?? 'iroh');
+    _markTransportConnected(
+      transport ??
+          _activeDevice?.transport ??
+          RemoteTransportKind.websocketRelay,
+    );
     if (!wasResponsive) {
-      CoduxLog.info('[codux-flutter-iroh] host responsive source=$source');
+      CoduxLog.info('[codux-flutter-remote] host responsive source=$source');
     }
   }
 
@@ -486,20 +479,20 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _pendingPingId = null;
     if (nextLatency <= 0 || nextLatency > 60000) return;
     CoduxLog.info(
-      '[codux-flutter-iroh] latency rtt=${nextLatency}ms path=$_irohConnectionPath',
+      '[codux-flutter-remote] latency rtt=${nextLatency}ms path=$_connectionPath',
     );
     if (_latencyMs == nextLatency) return;
     setState(() => _latencyMs = nextLatency);
   }
 
   void _sendHostInfoRequest() {
-    if (!_transportReady || !_irohReady) return;
+    if (!_transportReady || !_transportConnected) return;
     _send(const RelayEnvelope(type: 'host.info'));
   }
 
   void _sendTransportPing() {
     final target = _activeDevice;
-    if (!_transportReady || !_irohReady || target == null) return;
+    if (!_transportReady || !_transportConnected || target == null) return;
     if (_pendingPingId != null) return;
     final pingId = '${DateTime.now().microsecondsSinceEpoch}-${++_pingSeq}';
     _pendingPingId = pingId;
@@ -538,7 +531,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
 
   void _scheduleBackgroundDisconnect(AppLifecycleState state) {
     _cancelBackgroundDisconnect();
-    if (!_irohReady || _activeDevice == null) return;
+    if (!_transportConnected || _activeDevice == null) return;
     CoduxLog.info(
       '[codux-flutter-lifecycle] background disconnect scheduled state=${state.name}',
     );
@@ -571,7 +564,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
     if (_appSuspended || !_appInForeground) {
       CoduxLog.info(
-        '[codux-flutter-iroh] reconnect deferred reason=$reason appSuspended=$_appSuspended',
+        '[codux-flutter-remote] reconnect deferred reason=$reason appSuspended=$_appSuspended',
       );
       return;
     }
@@ -583,7 +576,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     bool closeTerminal = false,
     bool notifyHost = true,
   }) {
-    if (notifyHost && _irohReady) {
+    if (notifyHost && _transportConnected) {
       _send(const RelayEnvelope(type: 'device.disconnected'));
     }
     _cancelHostResponseProbe();
@@ -592,8 +585,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _healthTimer?.cancel();
     _healthTimer = null;
     _clearLatencyProbe();
-    _irohReady = false;
-    unawaited(_irohTransport.close());
+    _transportConnected = false;
+    unawaited(_closeActiveTransport());
     _terminalInputBatcher.reset();
     _clearPendingTerminalInputs();
     setState(() {
@@ -689,11 +682,6 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       send: _sendTerminalUploadEnvelopeReliable,
       afterChunkAck: () => Future<void>.delayed(Duration.zero),
     );
-    _irohTransport = CoduxRemoteIroh(bridge: widget.irohBridge)
-      ..onState = _handleIrohState
-      ..onEnvelope = (envelope) {
-        _handleIrohEnvelope(RelayEnvelope.fromJson(envelope));
-      };
     _voiceService = LocalVoiceRecognitionService(
       onLog: (message) => CoduxLog.info('[codux-flutter-voice] $message'),
     );
@@ -711,7 +699,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _latencyProbeTimer?.cancel();
     _pingTimeoutTimer?.cancel();
     _backgroundDisconnectTimer?.cancel();
-    _irohUpgradeTimer?.cancel();
+    _transportCloseTimer?.cancel();
     _toastTimer?.cancel();
     _filePickerTimeoutTimer?.cancel();
     _projectListRetryTimer?.cancel();
@@ -726,7 +714,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _terminalUploadSender.dispose();
     _clearPendingTerminalInputs();
     _voiceService.dispose();
-    unawaited(_irohTransport.close());
+    unawaited(_closeActiveTransport());
     _nativeTerminalController?.dispose();
     _settingsNameController.dispose();
     _fileEditorController.dispose();
@@ -746,7 +734,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _appSuspended = false;
       final device = _activeDevice;
       if (device == null) return;
-      if (_irohReady) {
+      if (_transportConnected) {
         CoduxLog.info(
           '[codux-flutter-lifecycle] resume keep existing transport host=${device.hostId} device=${device.deviceId}',
         );
@@ -942,7 +930,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _status = _t('pair.submitting');
     });
     try {
-      final confirmed = await _confirmIrohPairing(payload, name);
+      final confirmed = await _confirmRelayPairing(payload, name);
       if (!mounted) return;
       final hostName = confirmed.hostName?.trim().isNotEmpty == true
           ? confirmed.hostName!.trim()
@@ -985,39 +973,26 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  Future<StoredDevice> _confirmIrohPairing(
+  Future<StoredDevice> _confirmRelayPairing(
     PairingPayload payload,
     String name,
   ) async {
-    final nodeAddr = payload.iroh;
-    if (nodeAddr == null) {
-      throw Exception(_t('remote.qrMissingFields'));
-    }
-    final completer = Completer<StoredDevice>();
-    _irohPairingCompleter = completer;
-    _irohPairingDeviceName = name;
-    _irohPairingRequestSent = false;
     setState(() => _status = _t('pair.waiting'));
-    await _irohTransport.connect(nodeAddr: nodeAddr.toJson());
     try {
       return await Future.any<StoredDevice>([
-        completer.future,
-        _waitIrohPairingCancelled(),
-        Future<StoredDevice>.delayed(
-          const Duration(seconds: 90),
-          () => throw Exception(_t('remote.waitTimeout')),
+        claimPairingOverRelay(
+          payload: payload,
+          name: name,
+          timeout: const Duration(seconds: 90),
         ),
+        _waitPairingCancelled(),
       ]);
-    } finally {
-      _irohPairingCompleter = null;
-      _irohPairingDeviceName = null;
-      _irohPairingRequestSent = false;
-      await _irohTransport.close();
-      _irohReady = false;
+    } on PairingRejectedException {
+      rethrow;
     }
   }
 
-  Future<StoredDevice> _waitIrohPairingCancelled() async {
+  Future<StoredDevice> _waitPairingCancelled() async {
     while (!_pairingCancelled) {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
@@ -1043,11 +1018,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
   }
 
-  void _connect([
-    StoredDevice? device,
-    bool background = false,
-    IrohNodeAddr? freshDialNodeAddr,
-  ]) {
+  void _connect([StoredDevice? device, bool background = false]) {
     final target = device ?? _activeDevice;
     if (target == null) {
       setState(() => _showScanner = true);
@@ -1063,17 +1034,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _backgroundConnect = background;
     final generation = ++_transportGeneration;
     CoduxLog.info(
-      '[codux-flutter-iroh] connect start gen=$generation background=$background host=${target.hostId} device=${target.deviceId}',
+      '[codux-flutter-remote] connect start gen=$generation background=$background host=${target.hostId} device=${target.deviceId} transport=${target.transport}',
     );
     _cancelHostResponseProbe();
     _reconnectTimer?.cancel();
-    _irohUpgradeTimer?.cancel();
+    _transportCloseTimer?.cancel();
     _healthTimer?.cancel();
     _clearLatencyProbe();
-    unawaited(_irohTransport.close());
-    _irohReady = false;
-    _latestHostIrohNodeAddr = null;
-    _irohDirectPathSeen = false;
+    unawaited(_closeActiveTransport());
+    _transportConnected = false;
     _sendSeq = DateTime.now().microsecondsSinceEpoch;
     _receiveSeq = 0;
     _sendChain = Future<void>.value();
@@ -1088,7 +1057,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _transportReady = false;
       _remoteProtocolReady = false;
       _hostResponsive = false;
-      _irohConnectionPath = 'unknown';
+      _connectionPath = 'unknown';
       _latencyMs = null;
       if (!background) {
         _status = _t('app.connecting');
@@ -1113,37 +1082,34 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _activeDevice = target;
     });
     unawaited(_restoreCachedProjects(target));
-    final storedNodeAddr = stableIrohNodeAddr(target.iroh);
-    if (target.transport != 'iroh' || storedNodeAddr == null) {
+    if (target.preferredTransport.url.trim().isEmpty) {
       setState(() => _status = _t('pair.repairRequired'));
       return;
     }
-    final nodeAddr = freshDialNodeAddr == null
-        ? _irohStableDialNodeAddr(storedNodeAddr)
-        : stableIrohNodeAddr(freshDialNodeAddr)!;
-    CoduxLog.info(
-      '[codux-flutter-iroh] dial nodeId=${nodeAddr.nodeId} relay=${nodeAddr.relayUrl ?? ''} direct=${nodeAddr.directAddresses.length} storedDirect=${storedNodeAddr.directAddresses.length} fresh=${freshDialNodeAddr != null}',
-    );
-    _irohTransport.connect(nodeAddr: nodeAddr.toJson()).catchError((
-      Object error,
-    ) {
+    final transport = createRemoteTransport(target)
+      ..onState = _handleTransportState
+      ..onEnvelope = (envelope) {
+        _handleTransportEnvelopeQueued(RelayEnvelope.fromJson(envelope));
+      };
+    _activeTransport = transport;
+    transport.connect(target).catchError((Object error) {
       CoduxLog.warn(
-        '[codux-flutter-iroh] connect failed gen=$generation error=$error',
+        '[codux-flutter-remote] connect failed gen=$generation error=$error',
       );
       if (generation != _transportGeneration) return;
       if (!_backgroundConnect && mounted) {
         setState(() => _status = _t('connection.failedRetry'));
       }
-      _handleIrohClosed('connect_failed');
+      _handleTransportClosed('connect_failed');
     });
     _healthTimer = Timer(const Duration(seconds: 16), () {
       if (generation != _transportGeneration) return;
-      if (!_irohReady) {
-        CoduxLog.warn('[codux-flutter-iroh] connect timeout gen=$generation');
+      if (!_transportConnected) {
+        CoduxLog.warn('[codux-flutter-remote] connect timeout gen=$generation');
         if (!_backgroundConnect && mounted) {
           setState(() => _status = _t('connection.failedRetry'));
         }
-        _handleIrohClosed('hello_timeout');
+        _handleTransportClosed('hello_timeout');
       }
     });
   }
@@ -1159,7 +1125,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       ),
     );
     CoduxLog.info(
-      '[codux-flutter-iroh] reconnect scheduled host=${target.hostId} device=${target.deviceId} attempt=$_reconnectAttempt delayMs=${delay.inMilliseconds}',
+      '[codux-flutter-remote] reconnect scheduled host=${target.hostId} device=${target.deviceId} attempt=$_reconnectAttempt delayMs=${delay.inMilliseconds}',
     );
     _reconnectTimer = Timer(delay, () => _connect(target, true));
   }
@@ -1293,10 +1259,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
   }
 
   bool _send(RelayEnvelope message) {
-    if (!_irohReady) {
+    if (!_transportConnected) {
       setState(() => _status = _t('app.remoteNotConnected'));
       CoduxLog.warn(
-        '[codux-flutter-iroh] drop type=${message.type} reason=not_ready',
+        '[codux-flutter-remote] drop type=${message.type} reason=not_ready',
       );
       return false;
     }
@@ -1305,12 +1271,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     final previous = _sendChain.catchError((_) {});
     final task = previous
         .then((_) async {
-          if (!_irohReady) return;
+          if (!_transportConnected) return;
           CoduxLog.warn(
-            '[codux-flutter-iroh] send type=${message.type} session=${message.sessionId ?? ''}',
+            '[codux-flutter-remote] send type=${message.type} session=${message.sessionId ?? ''}',
           );
+          final transport = _activeTransport;
+          if (transport == null) return;
           if (activeDevice == null) {
-            await _irohTransport.send(message.toJson());
+            await transport.send(message.toJson());
             return;
           }
           final encrypted = await RemoteE2ECrypto.encryptEnvelope(
@@ -1318,11 +1286,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             device: activeDevice,
             seq: seq!,
           );
-          if (!_irohReady) return;
-          await _irohTransport.send(encrypted.toJson());
+          if (!_transportConnected) return;
+          await transport.send(encrypted.toJson());
         })
         .catchError((Object error) {
-          CoduxLog.error('[codux-flutter-e2e] iroh encrypt failed: $error');
+          CoduxLog.error('[codux-flutter-e2e] encrypt failed: $error');
           if (mounted) setState(() => _status = _t('pair.repairRequired'));
         });
     _sendChain = task;
@@ -1367,19 +1335,19 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _healthTimer?.cancel();
       _healthTimer = null;
       CoduxLog.warn(
-        '[codux-flutter-iroh] recv type=${message.type} session=${message.sessionId ?? ''}',
+        '[codux-flutter-remote] recv type=${message.type} session=${message.sessionId ?? ''}',
       );
       switch (message.type) {
         case 'hello':
           if (!_transportReady) {
             _reconnectAttempt = 0;
-            CoduxLog.info('[codux-flutter-iroh] hello received');
+            CoduxLog.info('[codux-flutter-remote] hello received');
             setState(() {
               _transportReady = true;
               _hasShownTerminal = true;
               if (!_backgroundConnect) _status = _t('app.connected');
             });
-            _markTransportConnected('iroh');
+            _markTransportConnected(target.transport);
             _sendHostInfoRequest();
             _startHostResponseProbe(reason: 'hello');
           }
@@ -1428,21 +1396,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
             _failRemoteProtocol(target, message.payload);
             return;
           }
-          _markHostResponsive('host.info', transport: 'iroh');
+          _markHostResponsive('host.info', transport: target.transport);
           final payload = message.payload;
           if (payload is Map) {
-            final iroh = _updateRuntimeIrohNodeAddr(payload['iroh']);
-            StoredDevice? updatedDevice;
-            if (payload['name'] != null || iroh != null) {
-              updatedDevice = _updateDevice(
+            if (payload['name'] != null) {
+              _updateDevice(
                 target.deviceId,
                 hostName: payload['name']?.toString(),
-                iroh: iroh,
               );
-            }
-            if (iroh != null) {
-              _latestHostIrohNodeAddr = iroh;
-              _evaluateIrohRelayUpgrade(updatedDevice ?? target);
             }
           }
           _markRemoteProtocolReady(
@@ -1707,104 +1668,53 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  void _handleIrohState(String rawState) {
+  void _handleTransportState(String rawState) {
     final state = rawState.split(':').first.trim();
     final detail = rawState.length > state.length
         ? rawState.substring(state.length + 1).trim()
         : '';
     CoduxLog.warn(
       detail.isEmpty
-          ? '[codux-flutter-iroh] state=$state'
-          : '[codux-flutter-iroh] state=$state detail=$detail',
+          ? '[codux-flutter-remote] state=$state'
+          : '[codux-flutter-remote] state=$state detail=$detail',
     );
     if (!mounted || _disposing) return;
-    if (state == 'path') {
-      final path = _parseIrohPath(detail);
+    if (state == 'path' || detail.contains('path=')) {
+      final path = _parseTransportPath(detail);
       if (path != null) {
-        final changed = path != _irohConnectionPath;
+        final changed = path != _connectionPath;
         _pingTimeoutTimer?.cancel();
         _pingTimeoutTimer = null;
         _pingSentAt = null;
         _pendingPingId = null;
         setState(() {
-          _irohConnectionPath = path;
+          _connectionPath = path;
           if (changed) _latencyMs = null;
         });
-        if (path == 'direct') {
-          _irohDirectPathSeen = true;
-          _lastIrohUpgradeSignature = null;
-          _lastIrohUpgradeAttemptAt = null;
-        }
-        if (changed) {
-          _sendTransportPing();
-          final device = _activeDevice;
-          if (device != null) {
-            _evaluateIrohRelayUpgrade(device);
-          }
-        }
-      }
-      return;
-    }
-    final pairingCompleter = _irohPairingCompleter;
-    if (pairingCompleter != null) {
-      if (state == 'connected') {
-        _irohReady = true;
-        if (_pendingPairing != null) {
-          setState(() => _status = _t('pair.waiting'));
-        }
-        if (!_irohPairingRequestSent) {
-          final payload = _pendingPairing;
-          final name = _irohPairingDeviceName;
-          if (payload != null && name != null) {
-            _irohPairingRequestSent = true;
-            final request = irohPairingRequestEnvelope(payload, name).toJson();
-            unawaited(
-              _irohTransport
-                  .send(request)
-                  .then((sent) {
-                    if (!sent && !pairingCompleter.isCompleted) {
-                      pairingCompleter.completeError(
-                        Exception('Iroh pairing request failed'),
-                      );
-                    }
-                  })
-                  .catchError((Object error) {
-                    if (!pairingCompleter.isCompleted) {
-                      pairingCompleter.completeError(error);
-                    }
-                  }),
-            );
-          }
-        }
-        return;
-      }
-      if ((state == 'failed' || state == 'closed') &&
-          !pairingCompleter.isCompleted) {
-        pairingCompleter.completeError(
-          Exception('Iroh pairing connection $state'),
-        );
-        return;
+        if (changed) _sendTransportPing();
       }
     }
     if (state == 'connected') {
       _reconnectAttempt = 0;
       setState(() {
-        _irohReady = true;
+        _transportConnected = true;
         _transportReady = true;
         _hasShownTerminal = true;
         if (!_backgroundConnect) _status = _t('app.connected');
       });
-      _markTransportConnected('iroh');
+      _markTransportConnected(
+        _activeDevice?.transport ?? RemoteTransportKind.websocketRelay,
+      );
       _sendHostInfoRequest();
-      _startHostResponseProbe(reason: 'iroh');
+      _startHostResponseProbe(reason: 'transport');
       return;
     }
     if (state == 'failed' || state == 'closed') {
-      _handleIrohClosed(state);
+      _handleTransportClosed(state);
     }
   }
 
-  String? _parseIrohPath(String detail) {
+  String? _parseTransportPath(String detail) {
     for (final part in detail.split(';')) {
       final trimmed = part.trim();
       if (!trimmed.startsWith('path=')) continue;
@@ -1819,104 +1729,23 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     return null;
   }
 
-  void _handleIrohEnvelope(RelayEnvelope message) {
+  void _handleTransportEnvelopeQueued(RelayEnvelope message) {
     CoduxLog.warn(
-      '[codux-flutter-iroh] envelope type=${message.type} session=${message.sessionId ?? ''}',
+      '[codux-flutter-remote] envelope type=${message.type} session=${message.sessionId ?? ''}',
     );
-    if (_irohPairingCompleter != null &&
-        (message.type == 'pairing.confirmed' ||
-            message.type == 'pairing.rejected')) {
-      _handleIrohPairingEnvelope(message);
-      return;
-    }
     final target = _activeDevice;
-    if (target == null || target.transport != 'iroh') return;
+    if (target == null) return;
     final previous = _receiveChain.catchError((_) {});
     final task = previous
         .then((_) => _handleTransportEnvelope(message, target))
         .catchError((Object error) {
-          CoduxLog.error('[codux-flutter-iroh] receive queue failed: $error');
+          CoduxLog.error('[codux-flutter-remote] receive queue failed: $error');
         });
     _receiveChain = task;
   }
 
-  void _handleIrohPairingEnvelope(RelayEnvelope message) {
-    final completer = _irohPairingCompleter;
-    final payload = _pendingPairing;
-    final name = _irohPairingDeviceName;
-    if (completer == null || payload == null || name == null) return;
-    if (message.type == 'pairing.confirmed') {
-      try {
-        completer.complete(
-          irohConfirmedDevice(payload: payload, name: name, confirmed: message),
-        );
-      } catch (error, stack) {
-        completer.completeError(error, stack);
-      }
-    } else if (message.type == 'pairing.rejected') {
-      completer.completeError(const PairingRejectedException());
-    }
-  }
-
-  IrohNodeAddr? _updateRuntimeIrohNodeAddr(Object? value) {
-    if (value is! Map) return null;
-    final addr = IrohNodeAddr.fromJson(Map<String, dynamic>.from(value));
-    if (addr.nodeId.trim().isEmpty) return null;
-    CoduxLog.info(
-      '[codux-flutter-iroh] add runtime node addr nodeId=${addr.nodeId} relay=${addr.relayUrl ?? ''} direct=${addr.directAddresses.length}',
-    );
-    unawaited(
-      _irohTransport.addNodeAddr(addr.toJson()).then((added) {
-        CoduxLog.info('[codux-flutter-iroh] runtime node addr accepted=$added');
-      }),
-    );
-    return addr;
-  }
-
-  void _evaluateIrohRelayUpgrade(StoredDevice device) {
-    if (_irohDirectPathSeen) return;
-    final addr = _latestHostIrohNodeAddr;
-    if (addr == null || addr.directAddresses.isEmpty) return;
-    if (!_irohReady || !_transportReady) return;
-    if (_irohConnectionPath != 'relay' && _irohConnectionPath != 'mixed') {
-      return;
-    }
-    final signature = _irohNodeAddrSignature(addr);
-    final now = DateTime.now();
-    final lastAttemptAt = _lastIrohUpgradeAttemptAt;
-    if (_lastIrohUpgradeSignature == signature &&
-        lastAttemptAt != null &&
-        now.difference(lastAttemptAt) < const Duration(minutes: 2)) {
-      return;
-    }
-    _irohUpgradeTimer?.cancel();
-    _irohUpgradeTimer = Timer(const Duration(milliseconds: 350), () {
-      if (!mounted || _disposing || !_appInForeground || _appSuspended) return;
-      if (_activeDevice?.deviceId != device.deviceId) return;
-      if (_irohConnectionPath != 'relay' && _irohConnectionPath != 'mixed') {
-        return;
-      }
-      _lastIrohUpgradeSignature = signature;
-      _lastIrohUpgradeAttemptAt = DateTime.now();
-      CoduxLog.info(
-        '[codux-flutter-iroh] upgrade reconnect path=$_irohConnectionPath direct=${addr.directAddresses.length}',
-      );
-      _connect(device, true, addr);
-    });
-  }
-
-  IrohNodeAddr _irohStableDialNodeAddr(IrohNodeAddr addr) {
-    return IrohNodeAddr(nodeId: addr.nodeId, relayUrl: addr.relayUrl);
-  }
-
-  String _irohNodeAddrSignature(IrohNodeAddr addr) {
-    final direct = addr.directAddresses.toSet().toList()..sort();
-    return [addr.nodeId, addr.relayUrl ?? '', ...direct].join('|');
-  }
-
-  void _handleIrohClosed(String reason) {
-    _irohReady = false;
-    if (_activeDevice?.transport != 'iroh') return;
+  void _handleTransportClosed(String reason) {
+    _transportConnected = false;
     setState(() {
       _transportReady = false;
       _remoteProtocolReady = false;
@@ -1934,6 +1763,12 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     if (target != null && _appInForeground && !_appSuspended) {
       _scheduleReconnect(target);
     }
+  }
+
+  Future<void> _closeActiveTransport() async {
+    final transport = _activeTransport;
+    _activeTransport = null;
+    await transport?.close();
   }
 
   void _handleTerminalOutput(RelayEnvelope message) {
@@ -2038,15 +1873,11 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  StoredDevice? _updateDevice(
-    String deviceId, {
-    String? hostName,
-    IrohNodeAddr? iroh,
-  }) {
+  StoredDevice? _updateDevice(String deviceId, {String? hostName}) {
     StoredDevice? updated;
     final next = _devices.map((item) {
       if (item.deviceId != deviceId) return item;
-      updated = item.copyWith(hostName: hostName, iroh: iroh);
+      updated = item.copyWith(hostName: hostName);
       return updated!;
     }).toList();
     if (updated != null) {
@@ -3266,8 +3097,8 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         .toList();
     if (_activeDevice?.deviceId == device.deviceId) {
       _shouldReconnect = false;
-      _irohReady = false;
-      unawaited(_irohTransport.close());
+      _transportConnected = false;
+      unawaited(_closeActiveTransport());
       _clearLatencyProbe();
     }
     await _saveDevices(next);
@@ -3575,7 +3406,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     }
   }
 
-  bool get _canUploadOverCurrentPath => _irohConnectionPath == 'direct';
+  bool get _canUploadOverCurrentPath => _isConnected;
 
   String _mimeForUpload(String name, {required bool image}) {
     final parts = name.split('.');

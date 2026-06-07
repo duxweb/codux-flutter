@@ -1,29 +1,32 @@
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../i18n.dart';
 import '../models/remote_models.dart';
 import 'e2e_crypto.dart';
 
+const String remoteProtocolVersion = 'v3.0';
+
 Future<PairingPayload> parsePairingPayload(String input) async {
   final parsed = _decodePairingPayload(input);
-  final transport = parsed['transport']?.toString() ?? '';
   final code = parsed['code']?.toString();
   final secret = parsed['secret']?.toString();
   final hostPublicKey = parsed['hostPublicKey']?.toString() ?? '';
   final cryptoVersion = parsed['cryptoVersion'] is num
       ? (parsed['cryptoVersion'] as num).toInt()
       : int.tryParse('${parsed['cryptoVersion'] ?? ''}') ?? 0;
-  final iroh = parsed['iroh'] is Map
-      ? IrohNodeAddr.fromJson(Map<String, dynamic>.from(parsed['iroh'] as Map))
-      : null;
+  final transports = _normalizedPairingTransports(parsed);
+  final hasSupportedTransport = transports.any(
+    (item) =>
+        item.kind == RemoteTransportKind.websocketRelay &&
+        item.url.trim().isNotEmpty,
+  );
   final missingFields = <String>[
-    if (transport != 'iroh') 'transport=iroh',
     if (code == null || code.isEmpty) 'code',
     if (secret == null || secret.isEmpty) 'secret',
     if (parsed['pairingId']?.toString().trim().isEmpty != false) 'pairingId',
     if (hostPublicKey.isEmpty) 'hostPublicKey',
     if (cryptoVersion < 1) 'cryptoVersion',
-    if (iroh == null) 'iroh',
-    if (iroh != null && iroh.nodeId.isEmpty) 'iroh.nodeId',
+    if (!hasSupportedTransport) 'transports.websocketRelay.url',
   ];
   if (missingFields.isNotEmpty) {
     throw Exception(
@@ -34,7 +37,6 @@ Future<PairingPayload> parsePairingPayload(String input) async {
   final pairingSecret = secret!;
   final deviceKeyPair = await RemoteE2ECrypto.newDeviceKeyPair();
   return PairingPayload(
-    server: '',
     code: pairingCode,
     secret: pairingSecret,
     hostPublicKey: hostPublicKey,
@@ -48,10 +50,15 @@ Future<PairingPayload> parsePairingPayload(String input) async {
     ),
     cryptoVersion: cryptoVersion,
     hostName: parsed['hostName']?.toString(),
-    transport: transport,
-    iroh: iroh,
+    transports: transports,
     pairingId: parsed['pairingId']?.toString(),
   );
+}
+
+List<RemoteTransportCandidate> _normalizedPairingTransports(
+  Map<String, dynamic> parsed,
+) {
+  return remoteTransportCandidatesFromJson(parsed['transports']);
 }
 
 Map<String, dynamic> _decodePairingPayload(String input) {
@@ -83,7 +90,7 @@ String? _tryBase64Decode(String value) {
   return null;
 }
 
-RelayEnvelope irohPairingRequestEnvelope(PairingPayload payload, String name) {
+RelayEnvelope pairingRequestEnvelope(PairingPayload payload, String name) {
   final pairingId = payload.pairingId?.trim();
   if (pairingId == null || pairingId.isEmpty) {
     throw Exception(tr('remote.qrMissingFields', LocaleChoices.system.id));
@@ -101,7 +108,86 @@ RelayEnvelope irohPairingRequestEnvelope(PairingPayload payload, String name) {
   );
 }
 
-StoredDevice irohConfirmedDevice({
+Future<StoredDevice> claimPairingOverRelay({
+  required PairingPayload payload,
+  required String name,
+  http.Client? client,
+  Duration timeout = const Duration(seconds: 90),
+}) async {
+  RemoteTransportCandidate? transport;
+  for (final candidate in payload.transports) {
+    if (candidate.kind == RemoteTransportKind.websocketRelay &&
+        candidate.url.trim().isNotEmpty) {
+      transport = candidate;
+      break;
+    }
+  }
+  if (transport == null) {
+    throw Exception(tr('remote.qrMissingFields', LocaleChoices.system.id));
+  }
+  final httpClient = client ?? http.Client();
+  final ownsClient = client == null;
+  try {
+    await _postJson(httpClient, transport.url, '/api/pairings/claim', {
+      'code': payload.code,
+      'secret': payload.secret,
+      'name': name,
+      'publicKey': payload.devicePublicKey,
+    });
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final status = await _postJson(
+        httpClient,
+        transport.url,
+        '/api/pairings/status',
+        {'code': payload.code, 'secret': payload.secret},
+      );
+      final state = '${status['status'] ?? ''}';
+      if (state == 'confirmed') {
+        return confirmedDevice(
+          payload: payload,
+          name: name,
+          confirmed: RelayEnvelope(type: 'pairing.confirmed', payload: status),
+        );
+      }
+      if (state == 'rejected') throw const PairingRejectedException();
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+    }
+    throw Exception(tr('remote.waitTimeout', LocaleChoices.system.id));
+  } finally {
+    if (ownsClient) httpClient.close();
+  }
+}
+
+Future<Map<String, dynamic>> _postJson(
+  http.Client client,
+  String base,
+  String path,
+  Map<String, dynamic> body,
+) async {
+  final uri = Uri.parse(base.trim()).replace(path: path, queryParameters: null);
+  final response = await client
+      .post(
+        uri,
+        headers: const {'content-type': 'application/json'},
+        body: jsonEncode(body),
+      )
+      .timeout(const Duration(seconds: 12));
+  final decoded = response.body.isEmpty
+      ? <String, dynamic>{}
+      : jsonDecode(response.body);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    if (decoded is Map && decoded['error'] != null) {
+      throw Exception(decoded['error']);
+    }
+    throw Exception('HTTP ${response.statusCode}');
+  }
+  if (decoded is Map<String, dynamic>) return decoded;
+  if (decoded is Map) return Map<String, dynamic>.from(decoded);
+  return <String, dynamic>{};
+}
+
+StoredDevice confirmedDevice({
   required PairingPayload payload,
   required String name,
   required RelayEnvelope confirmed,
@@ -113,8 +199,17 @@ StoredDevice irohConfirmedDevice({
       data['token'] == null) {
     throw Exception('Pairing confirmed without device credentials');
   }
+  RemoteTransportCandidate? relay;
+  for (final candidate in payload.transports) {
+    if (candidate.kind == RemoteTransportKind.websocketRelay &&
+        candidate.url.trim().isNotEmpty) {
+      relay = candidate;
+      break;
+    }
+  }
+  final server = relay?.url ?? '';
   return StoredDevice(
-    server: '',
+    server: server,
     hostId: '${data['hostId']}',
     deviceId: '${data['deviceId']}',
     token: '${data['token']}',
@@ -124,14 +219,8 @@ StoredDevice irohConfirmedDevice({
     devicePublicKey: payload.devicePublicKey,
     cryptoVersion: payload.cryptoVersion,
     hostName: data['hostName']?.toString() ?? payload.hostName,
-    transport: 'iroh',
-    iroh: stableIrohNodeAddr(payload.iroh),
+    transports: payload.transports,
   );
-}
-
-IrohNodeAddr? stableIrohNodeAddr(IrohNodeAddr? value) {
-  if (value == null) return null;
-  return value.stable();
 }
 
 class PairingCancelledException implements Exception {
