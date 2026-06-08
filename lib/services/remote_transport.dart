@@ -9,6 +9,7 @@ import '../models/remote_models.dart';
 typedef RemoteTransportStateHandler = void Function(String state);
 typedef RemoteTransportEnvelopeHandler =
     void Function(Map<String, dynamic> envelope);
+typedef RemoteTransportFactory = RemoteTransport Function(StoredDevice device);
 
 abstract interface class RemoteTransport {
   String get kind;

@@ -38,15 +38,12 @@ class TerminalBufferRetryCoordinator {
   }
 
   bool requestIfReady({
-    required bool terminalReady,
     required String? sessionId,
     required bool Function(String sessionId) send,
     bool force = false,
   }) {
     final id = sessionId;
-    if (!terminalReady ||
-        id == null ||
-        (!force && _lastBufferedSessionId == id)) {
+    if (id == null || (!force && _lastBufferedSessionId == id)) {
       return false;
     }
     if (_pendingSessionId != id) {
@@ -91,12 +88,7 @@ class TerminalBufferRetryCoordinator {
       if (_pendingSessionId != sessionId) return;
       _retryAttempt += 1;
       _lastBufferedSessionId = '';
-      requestIfReady(
-        terminalReady: true,
-        sessionId: sessionId,
-        send: send,
-        force: true,
-      );
+      requestIfReady(sessionId: sessionId, send: send, force: true);
     });
   }
 }

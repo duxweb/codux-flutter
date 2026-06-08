@@ -5,6 +5,7 @@ import '../models/remote_models.dart';
 class StorageService {
   static const devicesKey = 'codux.mobile.devices';
   static const legacyDeviceKey = 'codux.mobile.device';
+  static const lastDeviceIdKey = 'codux.mobile.last_device_id';
   static const settingsKey = 'codux.mobile.settings';
   static const projectCachePrefix = 'codux.mobile.projects';
 
@@ -34,6 +35,18 @@ class StorageService {
       devicesKey,
       jsonEncode(devices.map((item) => item.toJson()).toList()),
     );
+  }
+
+  Future<String?> loadLastDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString(lastDeviceIdKey);
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  Future<void> saveLastDeviceId(String deviceId) async {
+    if (deviceId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(lastDeviceIdKey, deviceId);
   }
 
   Future<MobileSettings?> loadSettings() async {

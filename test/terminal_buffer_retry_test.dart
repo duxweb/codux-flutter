@@ -19,7 +19,6 @@ void main() {
 
     expect(
       retry.requestIfReady(
-        terminalReady: true,
         sessionId: 'session-1',
         send: (sessionId) {
           sent.add(sessionId);
@@ -33,7 +32,6 @@ void main() {
 
     expect(
       retry.requestIfReady(
-        terminalReady: true,
         sessionId: 'session-1',
         send: (sessionId) {
           sent.add(sessionId);
@@ -64,7 +62,6 @@ void main() {
     );
 
     retry.requestIfReady(
-      terminalReady: true,
       sessionId: 'session-1',
       send: (sessionId) {
         sent.add(sessionId);
@@ -80,38 +77,33 @@ void main() {
     expect(retry.retryAttempt, 0);
   });
 
-  test(
-    'terminal buffer request waits for terminal readiness and session id',
-    () {
-      final sent = <String>[];
-      final retry = TerminalBufferRetryCoordinator();
+  test('terminal buffer request only requires a session id', () {
+    final sent = <String>[];
+    final retry = TerminalBufferRetryCoordinator();
 
-      expect(
-        retry.requestIfReady(
-          terminalReady: false,
-          sessionId: 'session-1',
-          send: (sessionId) {
-            sent.add(sessionId);
-            return true;
-          },
-        ),
-        isFalse,
-      );
-      expect(
-        retry.requestIfReady(
-          terminalReady: true,
-          sessionId: null,
-          send: (sessionId) {
-            sent.add(sessionId);
-            return true;
-          },
-        ),
-        isFalse,
-      );
+    expect(
+      retry.requestIfReady(
+        sessionId: 'session-1',
+        send: (sessionId) {
+          sent.add(sessionId);
+          return true;
+        },
+      ),
+      isTrue,
+    );
+    expect(
+      retry.requestIfReady(
+        sessionId: null,
+        send: (sessionId) {
+          sent.add(sessionId);
+          return true;
+        },
+      ),
+      isFalse,
+    );
 
-      expect(sent, isEmpty);
-    },
-  );
+    expect(sent, ['session-1']);
+  });
 }
 
 final class _FakeTimer implements Timer {

@@ -4,6 +4,20 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-06-08
+
+### Changed
+
+- Consolidated mobile remote state into dedicated device selection, connection sync, runtime store, and sync-state services so UI actions only trigger intent while the runtime store owns project and terminal decisions.
+- Limited terminal full-buffer recovery to bounded windows so large Codex resume histories remain usable on slower mobile networks.
+
+### Fixed
+
+- Fixed encrypted message replay detection so cross-channel packet reordering no longer drops valid `project.list`, `terminal.list`, `host.info`, or terminal output messages.
+- Fixed rapid project switching so `project.selected`, refreshed project/terminal lists, session binding, terminal resize, and terminal buffer recovery close reliably without blank terminal panes.
+- Fixed redundant missing-terminal recovery requests when a refreshed project list arrived before the matching terminal list.
+- Fixed first-entry and reopen flows by remembering the last responsive device and synchronizing cached projects with host-confirmed selected project state.
+
 ## [1.7.0] - 2026-06-08
 
 ### Added

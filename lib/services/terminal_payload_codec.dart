@@ -7,12 +7,14 @@ class TerminalOutputPayload {
     required this.isBuffer,
     this.offset,
     this.bufferLength,
+    this.truncated = false,
   });
 
   final String data;
   final bool isBuffer;
   final int? offset;
   final int? bufferLength;
+  final bool truncated;
 }
 
 TerminalOutputPayload decodeTerminalOutputPayload(
@@ -24,6 +26,7 @@ TerminalOutputPayload decodeTerminalOutputPayload(
     isBuffer: payload['buffer'] == true,
     offset: _intValue(payload['offset']),
     bufferLength: _intValue(payload['bufferLength']),
+    truncated: payload['truncated'] == true,
   );
 }
 

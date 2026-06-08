@@ -27,11 +27,13 @@ void main() {
       'buffer': true,
       'offset': 12,
       'bufferLength': 24,
+      'truncated': true,
     });
 
     expect(payload.data, 'deflate history');
     expect(payload.isBuffer, isTrue);
     expect(payload.offset, 12);
     expect(payload.bufferLength, 24);
+    expect(payload.truncated, isTrue);
   });
 }
