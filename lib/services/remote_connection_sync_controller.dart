@@ -27,12 +27,14 @@ class RemoteConnectionSyncController {
   bool protocolReady = false;
   int _deviceInfoSentGeneration = 0;
   int _hostInfoSentGeneration = 0;
+  int _forcedProtocolReadyGeneration = 0;
 
   int beginConnectionGeneration() {
     generation += 1;
     protocolReady = false;
     _deviceInfoSentGeneration = 0;
     _hostInfoSentGeneration = 0;
+    _forcedProtocolReadyGeneration = 0;
     syncState.beginConnectionGeneration();
     return generation;
   }
@@ -42,10 +44,15 @@ class RemoteConnectionSyncController {
   }
 
   void resetSyncForCurrentGeneration() {
+    _forcedProtocolReadyGeneration = 0;
     syncState.beginConnectionGeneration();
   }
 
   bool markProtocolReady({bool force = false}) {
+    if (force) {
+      if (_forcedProtocolReadyGeneration == generation) return false;
+      _forcedProtocolReadyGeneration = generation;
+    }
     if (protocolReady && !force) return false;
     protocolReady = true;
     return true;

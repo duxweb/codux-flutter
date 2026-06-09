@@ -10,6 +10,7 @@ Important changes to this project are documented here.
 
 - Consolidated mobile remote state into dedicated device selection, connection sync, runtime store, and sync-state services so UI actions only trigger intent while the runtime store owns project and terminal decisions.
 - Limited terminal full-buffer recovery to bounded windows so large Codex resume histories remain usable on slower mobile networks.
+- Added v3.1 host capability parsing and terminal-buffer chunk assembly so mobile consumes the same protocol API as desktop.
 
 ### Fixed
 
@@ -17,6 +18,7 @@ Important changes to this project are documented here.
 - Fixed rapid project switching so `project.selected`, refreshed project/terminal lists, session binding, terminal resize, and terminal buffer recovery close reliably without blank terminal panes.
 - Fixed redundant missing-terminal recovery requests when a refreshed project list arrived before the matching terminal list.
 - Fixed first-entry and reopen flows by remembering the last responsive device and synchronizing cached projects with host-confirmed selected project state.
+- Fixed oversized terminal-history loading by assembling chunked buffers with progress, duplicate-chunk protection, out-of-order delivery support, and a mobile memory ceiling.
 
 ## [1.7.0] - 2026-06-08
 

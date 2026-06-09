@@ -1,7 +1,7 @@
 <h1 align="center">Codux Mobile</h1>
 
 <p align="center">
-  <strong>A native mobile companion for the Codux macOS terminal workspace.</strong>
+  <strong>A native mobile controller for the Codux desktop workspace.</strong>
 </p>
 
 <p align="center">
@@ -37,13 +37,13 @@
 
 ## Why Codux Mobile?
 
-Codux on macOS owns the real projects, terminals, AI tool sessions, and relay pairing flow. Codux Mobile is the phone-side client that connects to that workspace and gives you a touch-first remote terminal without forcing the macOS terminal UI to resize.
+Codux Desktop owns the real projects, terminals, AI tool sessions, Git/worktree state, files, and relay pairing flow. Codux Mobile is the phone-side controller that connects to that workspace and gives you a touch-first remote runtime view without forcing the desktop terminal UI to resize.
 
 The mobile client focuses on three things:
 
 - **Reliable terminal rendering on Android** — uses a native Flutter platform view backed by Termux `TerminalView` / `TerminalEmulator`, not WebView or xterm.js.
 - **Mobile-safe input** — quick-key toolbar, IME toggle, text selection, scrollback, paste, image upload, and keyboard avoidance tuned for terminal TUI apps.
-- **Codux workspace integration** — QR pairing, device list, project tabs, terminal split list, file browser, and AI usage panels all connect to the Codux macOS host through the relay service.
+- **Codux workspace integration** — QR pairing, device list, project tabs, terminal split list, file browser, and AI usage panels all connect to the Codux desktop host through the v3.1 remote protocol.
 
 ## Features
 
@@ -61,17 +61,19 @@ The mobile client focuses on three things:
 ## Architecture
 
 ```text
-Codux Mobile (Flutter)
-  ├─ UI shell: device list, project tabs, file panel, stats, toolbar
-  ├─ Native terminal plugin: Flutter PlatformView + Termux TerminalView
-  └─ Relay client: WebSocket messages to Codux relay
+Codux Mobile (Flutter controller)
+  ├─ UI shell: renders runtime state and emits user intent
+  ├─ Runtime store: selected project, active terminal, sync state
+  ├─ Protocol client: v3.1 envelopes, capabilities, chunk assembly, ack/retry
+  ├─ Transport drivers: WebRTC DataChannel and WebSocket relay fallback
+  └─ Native terminal plugin: Flutter PlatformView + Termux TerminalView
 
-Codux macOS host
-  ├─ Owns projects, terminal sessions, PTYs, files, and AI usage state
-  └─ Confirms mobile pairing and forwards terminal/file/stat events
+Codux Desktop host
+  ├─ Owns projects, terminal sessions, PTYs, files, Git/worktree state, and AI usage
+  └─ Confirms mobile pairing and serves runtime-domain protocol messages
 ```
 
-The mobile app does not try to become the source of truth for terminal sessions. It renders and interacts with the host-owned workspace through explicit relay protocol messages. Business payloads are wrapped as end-to-end encrypted `secure.message` envelopes; the derived host/device symmetric key is cached for the active connection, while terminal input/output is still sent through ordered queues.
+The mobile app is controller-only. It does not try to become the source of truth for terminal sessions, files, Git state, or projects. It renders and interacts with the host-owned workspace through explicit runtime-domain protocol messages. Business payloads are wrapped as end-to-end encrypted `secure.message` envelopes, while terminal history uses bounded v3.1 buffer windows with chunk assembly and progress reporting.
 
 ## Requirements
 

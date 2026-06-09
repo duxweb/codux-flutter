@@ -8,6 +8,10 @@ class TerminalOutputPayload {
     this.offset,
     this.bufferLength,
     this.truncated = false,
+    this.requestId,
+    this.tail = false,
+    this.screenSnapshot = false,
+    this.hasPrevious = false,
   });
 
   final String data;
@@ -15,6 +19,10 @@ class TerminalOutputPayload {
   final int? offset;
   final int? bufferLength;
   final bool truncated;
+  final String? requestId;
+  final bool tail;
+  final bool screenSnapshot;
+  final bool hasPrevious;
 }
 
 TerminalOutputPayload decodeTerminalOutputPayload(
@@ -27,6 +35,10 @@ TerminalOutputPayload decodeTerminalOutputPayload(
     offset: _intValue(payload['offset']),
     bufferLength: _intValue(payload['bufferLength']),
     truncated: payload['truncated'] == true,
+    requestId: _stringValue(payload['requestId']),
+    tail: payload['tail'] == true,
+    screenSnapshot: payload['screenSnapshot'] == true,
+    hasPrevious: payload['hasPrevious'] == true,
   );
 }
 
@@ -42,4 +54,9 @@ int? _intValue(Object? value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
   return int.tryParse('${value ?? ''}');
+}
+
+String? _stringValue(Object? value) {
+  final text = value?.toString().trim();
+  return text == null || text.isEmpty ? null : text;
 }

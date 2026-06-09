@@ -104,6 +104,46 @@ void main() {
 
     expect(sent, ['session-1']);
   });
+
+  test('full snapshot request can replace a pending buffer request', () {
+    final timers = <_FakeTimer>[];
+    final sent = <String>[];
+    final retry = TerminalBufferRetryCoordinator(
+      timerFactory: (delay, callback) {
+        final timer = _FakeTimer(callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
+
+    expect(
+      retry.requestIfReady(
+        sessionId: 'session-1',
+        send: (sessionId) {
+          sent.add('partial:$sessionId');
+          return true;
+        },
+      ),
+      isTrue,
+    );
+    expect(
+      retry.requestIfReady(
+        sessionId: 'session-1',
+        force: true,
+        replacePending: true,
+        send: (sessionId) {
+          sent.add('full:$sessionId');
+          return true;
+        },
+      ),
+      isTrue,
+    );
+
+    expect(sent, ['partial:session-1', 'full:session-1']);
+    expect(retry.pendingSessionId, 'session-1');
+    expect(timers.first.isActive, isFalse);
+    expect(timers.last.isActive, isTrue);
+  });
 }
 
 final class _FakeTimer implements Timer {

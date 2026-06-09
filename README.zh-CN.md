@@ -1,7 +1,7 @@
 <h1 align="center">Codux Mobile</h1>
 
 <p align="center">
-  <strong>Codux macOS 终端工作台的原生移动端客户端。</strong>
+  <strong>Codux 桌面工作台的原生移动端主控。</strong>
 </p>
 
 <p align="center">
@@ -37,13 +37,13 @@
 
 ## 为什么需要 Codux Mobile？
 
-macOS 端 Codux 负责真实项目、终端会话、AI 工具运行、文件操作和配对确认。Codux Mobile 是手机侧客户端，用移动端友好的方式连接这个工作台，远程显示和操作终端，同时避免手机输入法导致 macOS 端终端反复 resize。
+Codux Desktop 负责真实项目、终端会话、AI 工具运行、Git/worktree 状态、文件和配对确认。Codux Mobile 是手机侧主控端，用移动端友好的方式连接这个工作台，远程显示和操作 runtime 状态，同时避免手机输入法导致桌面端终端反复 resize。
 
 移动端当前聚焦三件事：
 
 - **稳定的 Android 终端渲染**：使用基于 Termux `TerminalView` / `TerminalEmulator` 的 Flutter 原生 PlatformView，不再走 WebView 或 xterm.js。
 - **移动端输入体验**：支持快捷工具栏、输入法开关、文字选择、滚动历史、粘贴、图片上传，以及针对 TUI 程序调过的输入法避让。
-- **接入 Codux 工作台**：扫码配对、设备列表、项目标签、终端分屏、文件浏览、AI 用量面板都通过 relay 服务连接 macOS host。
+- **接入 Codux 工作台**：扫码配对、设备列表、项目标签、终端分屏、文件浏览、AI 用量面板都通过 v3.1 远程协议连接 Codux 桌面 host。
 
 ## 功能
 
@@ -61,17 +61,19 @@ macOS 端 Codux 负责真实项目、终端会话、AI 工具运行、文件操�
 ## 架构
 
 ```text
-Codux Mobile (Flutter)
-  ├─ UI 外壳：设备列表、项目标签、文件面板、统计、工具栏
-  ├─ 原生终端插件：Flutter PlatformView + Termux TerminalView
-  └─ Relay 客户端：WebSocket 消息连接 Codux relay
+Codux Mobile (Flutter 主控端)
+  ├─ UI 外壳：渲染 runtime 状态并发出用户意图
+  ├─ Runtime store：选中项目、当前终端、同步状态
+  ├─ 协议客户端：v3.1 envelope、capabilities、分片组包、ack/retry
+  ├─ 传输驱动：WebRTC DataChannel 和 WebSocket relay 回退
+  └─ 原生终端插件：Flutter PlatformView + Termux TerminalView
 
-Codux macOS host
-  ├─ 持有项目、终端会话、PTY、文件和 AI 用量状态
-  └─ 确认移动端配对并转发终端/文件/统计事件
+Codux Desktop host
+  ├─ 持有项目、终端会话、PTY、文件、Git/worktree 状态和 AI 用量
+  └─ 确认移动端配对并提供 runtime domain 协议消息
 ```
 
-移动端不作为终端会话的源头，只负责渲染、输入和交互。真实会话仍由 macOS 端工作台管理。业务 payload 会封装为端到端加密的 `secure.message`，当前连接会缓存 host/device 派生后的对称密钥，终端输入输出仍通过有序队列发送。
+移动端只作为主控端，不作为终端会话、文件、Git 状态或项目列表的源头。真实会话仍由桌面端工作台管理。业务 payload 会封装为端到端加密的 `secure.message`，终端历史使用有界 v3.1 buffer window，支持分片组包和进度显示。
 
 ## 环境要求
 

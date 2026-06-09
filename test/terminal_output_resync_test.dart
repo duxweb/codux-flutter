@@ -27,7 +27,7 @@ void main() {
     expect(requestedFullBuffer, isFalse);
   });
 
-  test('blocks backlog after a gap until full buffer restores state', () {
+  test('rebases skipped live output without full buffer recovery', () {
     final sequencer = TerminalOutputSequencer();
     final rendered = <int>[];
     var fullBufferRequests = 0;
@@ -44,8 +44,8 @@ void main() {
       if (result.requestFullBuffer) fullBufferRequests += 1;
     }
 
-    expect(rendered, [1, 2]);
-    expect(fullBufferRequests, 5);
+    expect(rendered, [1, 2, 5, 6, 7, 8, 9]);
+    expect(fullBufferRequests, 0);
 
     final snapshot = observeTerminalOutputForResync(
       sequencer: sequencer,
@@ -62,6 +62,108 @@ void main() {
       offset: null,
     );
 
+    expect(snapshot.render, isTrue);
+    expect(snapshot.requestFullBuffer, isFalse);
+    expect(next.render, isTrue);
+    expect(next.requestFullBuffer, isFalse);
+  });
+
+  test(
+    'truncated tail snapshot can replace output after skipped live data',
+    () {
+      final sequencer = TerminalOutputSequencer();
+      final first = observeTerminalOutputForResync(
+        sequencer: sequencer,
+        sessionId: 'term-1',
+        isBuffer: false,
+        outputSeq: 1,
+        offset: null,
+      );
+      final skipped = observeTerminalOutputForResync(
+        sequencer: sequencer,
+        sessionId: 'term-1',
+        isBuffer: false,
+        outputSeq: 900,
+        offset: null,
+      );
+      final nextSkipped = observeTerminalOutputForResync(
+        sequencer: sequencer,
+        sessionId: 'term-1',
+        isBuffer: false,
+        outputSeq: 901,
+        offset: null,
+      );
+      final tailSnapshot = observeTerminalOutputForResync(
+        sequencer: sequencer,
+        sessionId: 'term-1',
+        isBuffer: true,
+        outputSeq: 901,
+        offset: 120000,
+        resetsSequence: true,
+      );
+      final next = observeTerminalOutputForResync(
+        sequencer: sequencer,
+        sessionId: 'term-1',
+        isBuffer: false,
+        outputSeq: 902,
+        offset: null,
+      );
+
+      expect(first.render, isTrue);
+      expect(skipped.render, isTrue);
+      expect(skipped.requestFullBuffer, isFalse);
+      expect(nextSkipped.render, isTrue);
+      expect(nextSkipped.requestFullBuffer, isFalse);
+      expect(tailSnapshot.render, isTrue);
+      expect(tailSnapshot.requestFullBuffer, isFalse);
+      expect(next.render, isTrue);
+      expect(next.requestFullBuffer, isFalse);
+    },
+  );
+
+  test('snapshot resets sequence after skipped live output', () {
+    final sequencer = TerminalOutputSequencer();
+    expect(
+      observeTerminalOutputForResync(
+        sequencer: sequencer,
+        sessionId: 'term-1',
+        isBuffer: false,
+        outputSeq: 100,
+        offset: null,
+      ).render,
+      isTrue,
+    );
+    final skipped = observeTerminalOutputForResync(
+      sequencer: sequencer,
+      sessionId: 'term-1',
+      isBuffer: false,
+      outputSeq: 900,
+      offset: null,
+    );
+    final nextSkipped = observeTerminalOutputForResync(
+      sequencer: sequencer,
+      sessionId: 'term-1',
+      isBuffer: false,
+      outputSeq: 940,
+      offset: null,
+    );
+    final snapshot = observeTerminalOutputForResync(
+      sequencer: sequencer,
+      sessionId: 'term-1',
+      isBuffer: true,
+      outputSeq: 900,
+      offset: 0,
+    );
+    final next = observeTerminalOutputForResync(
+      sequencer: sequencer,
+      sessionId: 'term-1',
+      isBuffer: false,
+      outputSeq: 941,
+      offset: null,
+    );
+
+    expect(skipped.requestFullBuffer, isFalse);
+    expect(nextSkipped.requestFullBuffer, isFalse);
     expect(snapshot.render, isTrue);
     expect(snapshot.requestFullBuffer, isFalse);
     expect(next.render, isTrue);

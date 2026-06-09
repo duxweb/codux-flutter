@@ -37,7 +37,7 @@ void main() {
     expect(sequencer.sequenceFor('term-1'), 2);
   });
 
-  test('detects gaps and blocks later deltas until full buffer arrives', () {
+  test('rebases live sequence gaps without forcing full buffer', () {
     final sequencer = TerminalOutputSequencer()
       ..observe(sessionId: 'term-1', isBuffer: false, outputSeq: 1);
 
@@ -52,14 +52,14 @@ void main() {
       outputSeq: 4,
     );
 
-    expect(gap.action, TerminalOutputSequenceAction.gap);
-    expect(gap.expectedSeq, 2);
-    expect(laterDelta.action, TerminalOutputSequenceAction.gap);
-    expect(sequencer.sequenceFor('term-1'), 1);
-    expect(sequencer.isResyncing('term-1'), isTrue);
+    expect(gap.action, TerminalOutputSequenceAction.accept);
+    expect(gap.previousSeq, 1);
+    expect(laterDelta.action, TerminalOutputSequenceAction.accept);
+    expect(sequencer.sequenceFor('term-1'), 4);
+    expect(sequencer.isResyncing('term-1'), isFalse);
   });
 
-  test('full buffer clears gap state and resumes ordered output', () {
+  test('full buffer resets sequence and resumes ordered output', () {
     final sequencer = TerminalOutputSequencer()
       ..observe(sessionId: 'term-1', isBuffer: false, outputSeq: 1)
       ..observe(sessionId: 'term-1', isBuffer: false, outputSeq: 3);
@@ -101,5 +101,69 @@ void main() {
     expect(snapshot.action, TerminalOutputSequenceAction.snapshot);
     expect(next.action, TerminalOutputSequenceAction.accept);
     expect(sequencer.sequenceFor('term-1'), 1);
+  });
+
+  test('truncated tail buffer clears gap state for large histories', () {
+    final sequencer = TerminalOutputSequencer()
+      ..observe(sessionId: 'term-1', isBuffer: false, outputSeq: 1);
+
+    final gap = sequencer.observe(
+      sessionId: 'term-1',
+      isBuffer: false,
+      outputSeq: 900,
+    );
+    final tailSnapshot = sequencer.observe(
+      sessionId: 'term-1',
+      isBuffer: true,
+      outputSeq: 900,
+      offset: 120000,
+      resetsSequence: true,
+    );
+    final next = sequencer.observe(
+      sessionId: 'term-1',
+      isBuffer: false,
+      outputSeq: 901,
+    );
+
+    expect(gap.action, TerminalOutputSequenceAction.accept);
+    expect(tailSnapshot.action, TerminalOutputSequenceAction.snapshot);
+    expect(sequencer.isResyncing('term-1'), isFalse);
+    expect(next.action, TerminalOutputSequenceAction.accept);
+    expect(sequencer.sequenceFor('term-1'), 901);
+  });
+
+  test('full buffer catches up to live output seen while resyncing', () {
+    final sequencer = TerminalOutputSequencer()
+      ..observe(sessionId: 'term-1', isBuffer: false, outputSeq: 100);
+
+    final gap = sequencer.observe(
+      sessionId: 'term-1',
+      isBuffer: false,
+      outputSeq: 900,
+    );
+    final liveWhileResyncing = sequencer.observe(
+      sessionId: 'term-1',
+      isBuffer: false,
+      outputSeq: 940,
+    );
+    final snapshot = sequencer.observe(
+      sessionId: 'term-1',
+      isBuffer: true,
+      outputSeq: 900,
+      offset: 0,
+    );
+    final afterSnapshotSeq = sequencer.sequenceFor('term-1');
+    final next = sequencer.observe(
+      sessionId: 'term-1',
+      isBuffer: false,
+      outputSeq: 941,
+    );
+
+    expect(gap.action, TerminalOutputSequenceAction.accept);
+    expect(liveWhileResyncing.action, TerminalOutputSequenceAction.accept);
+    expect(snapshot.action, TerminalOutputSequenceAction.snapshot);
+    expect(afterSnapshotSeq, 900);
+    expect(next.action, TerminalOutputSequenceAction.accept);
+    expect(sequencer.sequenceFor('term-1'), 941);
   });
 }

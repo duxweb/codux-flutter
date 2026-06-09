@@ -5,7 +5,7 @@ import '../i18n.dart';
 import '../models/remote_models.dart';
 import 'e2e_crypto.dart';
 
-const String remoteProtocolVersion = 'v3.0';
+const String remoteProtocolVersion = 'v3.1';
 
 Future<PairingPayload> parsePairingPayload(String input) async {
   final parsed = await _fetchPairingTicketPayload(input);

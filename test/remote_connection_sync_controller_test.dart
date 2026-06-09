@@ -82,4 +82,19 @@ void main() {
       isTrue,
     );
   });
+
+  test('forced protocol ready is accepted once per connection generation', () {
+    final controller = RemoteConnectionSyncController();
+    controller.beginConnectionGeneration();
+
+    expect(controller.markProtocolReady(force: true), isTrue);
+    expect(controller.markProtocolReady(force: true), isFalse);
+
+    controller.resetSyncForCurrentGeneration();
+    expect(controller.markProtocolReady(force: true), isTrue);
+    expect(controller.markProtocolReady(force: true), isFalse);
+
+    controller.beginConnectionGeneration();
+    expect(controller.markProtocolReady(force: true), isTrue);
+  });
 }

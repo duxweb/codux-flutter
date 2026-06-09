@@ -83,8 +83,43 @@ void main() {
     },
   );
 
+  test('user project selection immediately binds known project terminal', () {
+    final store = RemoteRuntimeStore();
+    store.applyProjectList(
+      projects: _projects,
+      remoteSelectedProjectId: 'project-1',
+      terminalVisible: true,
+      terminalListLoaded: false,
+    );
+    store.applyTerminalList(
+      terminals: const [
+        TerminalInfo(id: 'session-1', title: 'One', projectId: 'project-1'),
+        TerminalInfo(id: 'session-2', title: 'Two', projectId: 'project-2'),
+      ],
+      terminalVisible: true,
+      terminalListLoaded: true,
+    );
+
+    final select = store.userSelectProject(
+      project: _projects[1],
+      terminalVisible: true,
+    );
+    final beforeHost = store.ensureTerminalForSelectedProject(
+      terminalVisible: true,
+      terminalListLoaded: true,
+    );
+
+    expect(select.requestProjectSelectId, 'project-2');
+    expect(select.clearTerminal, isFalse);
+    expect(select.bindSessionId, 'session-2');
+    expect(select.bindFullBuffer, isTrue);
+    expect(beforeHost.requestProjectSelectId, isNull);
+    expect(beforeHost.bindSessionId, isNull);
+    expect(store.activeSessionId, 'session-2');
+  });
+
   test(
-    'user project selection waits for host list instead of using old list',
+    'user project selection requests host select when local terminal is unknown',
     () {
       final store = RemoteRuntimeStore();
       store.applyProjectList(
@@ -105,13 +140,10 @@ void main() {
         project: _projects[1],
         terminalVisible: true,
       );
-      final beforeHost = store.ensureTerminalForSelectedProject(
-        terminalVisible: true,
-        terminalListLoaded: true,
-      );
 
       expect(select.requestProjectSelectId, 'project-2');
-      expect(beforeHost.requestProjectSelectId, isNull);
+      expect(select.clearTerminal, isFalse);
+      expect(select.bindSessionId, isNull);
       expect(store.activeSessionId, isNull);
 
       final afterHost = store.applyTerminalList(
@@ -209,6 +241,58 @@ void main() {
     expect(store.terminals, isEmpty);
   });
 
+  test('stores git status by project in runtime state', () {
+    final store = RemoteRuntimeStore();
+    store.applyProjectList(
+      projects: _projects,
+      remoteSelectedProjectId: 'project-2',
+      terminalVisible: false,
+      terminalListLoaded: false,
+    );
+
+    final plan = store.applyGitStatus(
+      const RemoteGitStatusInfo(
+        projectId: 'project-2',
+        projectPath: '/tmp/project-2',
+        branch: 'main',
+        ahead: 2,
+        behind: 1,
+        staged: 1,
+        unstaged: 2,
+        untracked: 3,
+        changes: 6,
+        isRepository: true,
+      ),
+    );
+
+    expect(plan.stateChanged, isTrue);
+    expect(store.selectedGitStatus?.branch, 'main');
+    expect(store.selectedGitStatus?.changes, 6);
+  });
+
+  test('terminal scope follows active terminal project and path', () {
+    final store = RemoteRuntimeStore();
+    store.applyProjectList(
+      projects: _projects,
+      remoteSelectedProjectId: 'project-1',
+      terminalVisible: true,
+      terminalListLoaded: false,
+    );
+    store.applyTerminalList(
+      terminals: const [
+        TerminalInfo(id: 'session-1', title: 'One', projectId: 'project-1'),
+        TerminalInfo(id: 'session-2', title: 'Two', projectId: 'project-2'),
+      ],
+      terminalVisible: true,
+      terminalListLoaded: true,
+    );
+
+    final scope = store.terminalScopeForSession('session-2');
+
+    expect(scope?.projectId, 'project-2');
+    expect(scope?.projectPath, '/tmp/project-2');
+  });
+
   test(
     'terminal close removes active session without changing selected project',
     () {
@@ -238,6 +322,6 @@ void main() {
 }
 
 const _projects = [
-  ProjectInfo(id: 'project-1', name: 'Project 1'),
-  ProjectInfo(id: 'project-2', name: 'Project 2'),
+  ProjectInfo(id: 'project-1', name: 'Project 1', path: '/tmp/project-1'),
+  ProjectInfo(id: 'project-2', name: 'Project 2', path: '/tmp/project-2'),
 ];

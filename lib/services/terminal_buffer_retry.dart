@@ -41,23 +41,26 @@ class TerminalBufferRetryCoordinator {
     required String? sessionId,
     required bool Function(String sessionId) send,
     bool force = false,
+    bool replacePending = false,
   }) {
     final id = sessionId;
     if (id == null || (!force && _lastBufferedSessionId == id)) {
       return false;
     }
+    if (replacePending && _pendingSessionId == id) {
+      _retryTimer?.cancel();
+      _retryTimer = null;
+      _pendingSessionId = null;
+      _retryAttempt = 0;
+      _lastBufferedSessionId = '';
+    }
     if (_pendingSessionId != id) {
       _retryAttempt = 0;
     }
-    if (!force && _pendingSessionId == id) {
+    if (_pendingSessionId == id) {
       return false;
     }
-    final sent = send(id);
-    if (!sent) return false;
-    _lastBufferedSessionId = id;
-    _pendingSessionId = id;
-    _scheduleRetry(id, send);
-    return true;
+    return _sendAndTrack(id, send);
   }
 
   void markReceived({
@@ -88,7 +91,16 @@ class TerminalBufferRetryCoordinator {
       if (_pendingSessionId != sessionId) return;
       _retryAttempt += 1;
       _lastBufferedSessionId = '';
-      requestIfReady(sessionId: sessionId, send: send, force: true);
+      _sendAndTrack(sessionId, send);
     });
+  }
+
+  bool _sendAndTrack(String sessionId, bool Function(String sessionId) send) {
+    final sent = send(sessionId);
+    if (!sent) return false;
+    _lastBufferedSessionId = sessionId;
+    _pendingSessionId = sessionId;
+    _scheduleRetry(sessionId, send);
+    return true;
   }
 }

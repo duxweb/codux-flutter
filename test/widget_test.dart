@@ -20,11 +20,13 @@ void main() {
     (WidgetTester tester) async {
       CoduxLog.setLevelName('debug');
       CoduxLog.clear();
+      final sent = <Map<String, dynamic>>[];
       final device = await _fakeDevice();
       final fake = _FakeRemoteTransport(
         device: device,
         onSent: (transport, envelope) {
           final type = '${envelope['type'] ?? ''}';
+          sent.add(envelope);
           if (type == 'host.info') {
             transport.emitEncrypted(
               const RelayEnvelope(
@@ -43,10 +45,7 @@ void main() {
               ),
             );
             transport.emitEncrypted(
-              const RelayEnvelope(
-                type: 'host.info',
-                payload: {'protocolVersion': remoteProtocolVersion},
-              ),
+              RelayEnvelope(type: 'host.info', payload: _hostInfoPayload()),
             );
             return;
           }
@@ -108,6 +107,15 @@ void main() {
       );
       expect(log, contains('bind session=session-1 project=project-1'));
       expect(log, contains('request terminal.buffer session=session-1'));
+      final bufferPayload = _lastPayloadOf(sent, 'terminal.buffer');
+      expect(bufferPayload?['projectId'], 'project-1');
+      expect(bufferPayload?['projectPath'], '/tmp/p1');
+      expect(bufferPayload?['requestId'], isA<String>());
+      expect(bufferPayload?['tail'], isTrue);
+      expect(bufferPayload?.containsKey('cols'), isFalse);
+      expect(bufferPayload?.containsKey('rows'), isFalse);
+      expect(_sentTypes(sent), contains('terminal.viewport.claim'));
+      expect(_sentTypes(sent), isNot(contains('terminal.resize')));
     },
   );
 
@@ -117,12 +125,14 @@ void main() {
       CoduxLog.setLevelName('debug');
       CoduxLog.clear();
       final sentTypes = <String>[];
+      final sent = <Map<String, dynamic>>[];
       final device = await _fakeDevice();
       final fake = _FakeRemoteTransport(
         device: device,
         onSent: (transport, envelope) {
           final type = '${envelope['type'] ?? ''}';
           sentTypes.add(type);
+          sent.add(envelope);
           if (type == 'host.info') {
             transport.emitEncrypted(
               const RelayEnvelope(
@@ -152,10 +162,7 @@ void main() {
               ),
             );
             transport.emitEncrypted(
-              const RelayEnvelope(
-                type: 'host.info',
-                payload: {'protocolVersion': remoteProtocolVersion},
-              ),
+              RelayEnvelope(type: 'host.info', payload: _hostInfoPayload()),
             );
             return;
           }
@@ -194,6 +201,15 @@ void main() {
       expect(log, contains('bind session=session-2 project=project-2'));
       expect(log, contains('request terminal.buffer session=session-2'));
       expect(sentTypes.where((type) => type == 'project.select'), isEmpty);
+      final bufferPayload = _lastPayloadOf(sent, 'terminal.buffer');
+      expect(bufferPayload?['projectId'], 'project-2');
+      expect(bufferPayload?['projectPath'], '/tmp/p2');
+      expect(bufferPayload?['requestId'], isA<String>());
+      expect(bufferPayload?['tail'], isTrue);
+      expect(bufferPayload?.containsKey('cols'), isFalse);
+      expect(bufferPayload?.containsKey('rows'), isFalse);
+      expect(sentTypes, contains('terminal.viewport.claim'));
+      expect(sentTypes, isNot(contains('terminal.resize')));
     },
   );
 
@@ -203,12 +219,14 @@ void main() {
       CoduxLog.setLevelName('debug');
       CoduxLog.clear();
       final sentTypes = <String>[];
+      final sent = <Map<String, dynamic>>[];
       final device = await _fakeDevice();
       final fake = _FakeRemoteTransport(
         device: device,
         onSent: (transport, envelope) {
           final type = '${envelope['type'] ?? ''}';
           sentTypes.add(type);
+          sent.add(envelope);
           if (type == 'host.info') {
             transport.emitEncrypted(
               const RelayEnvelope(
@@ -238,10 +256,7 @@ void main() {
               ),
             );
             transport.emitEncrypted(
-              const RelayEnvelope(
-                type: 'host.info',
-                payload: {'protocolVersion': remoteProtocolVersion},
-              ),
+              RelayEnvelope(type: 'host.info', payload: _hostInfoPayload()),
             );
             return;
           }
@@ -332,6 +347,13 @@ void main() {
       );
       expect(log, contains('bind session=session-2 project=project-2'));
       expect(log, contains('request terminal.buffer session=session-2'));
+      final bufferPayload = _lastPayloadOf(sent, 'terminal.buffer');
+      expect(bufferPayload?['projectId'], 'project-2');
+      expect(bufferPayload?['projectPath'], '/tmp/p2');
+      expect(bufferPayload?.containsKey('cols'), isFalse);
+      expect(bufferPayload?.containsKey('rows'), isFalse);
+      expect(sentTypes, contains('terminal.viewport.claim'));
+      expect(sentTypes, isNot(contains('terminal.resize')));
     },
   );
 
@@ -375,10 +397,7 @@ void main() {
               seq: 33,
             );
             transport.emitEncrypted(
-              const RelayEnvelope(
-                type: 'host.info',
-                payload: {'protocolVersion': remoteProtocolVersion},
-              ),
+              RelayEnvelope(type: 'host.info', payload: _hostInfoPayload()),
               seq: 35,
             );
             return;
@@ -418,6 +437,134 @@ void main() {
       expect(log, contains('project.list count=1 selected=project-1'));
       expect(log, contains('terminal.list count=1'));
       expect(log, contains('bind session=session-1 project=project-1'));
+    },
+  );
+
+  testWidgets(
+    'host runtime instance change clears stale terminal cache and resyncs',
+    (WidgetTester tester) async {
+      CoduxLog.setLevelName('debug');
+      CoduxLog.clear();
+      final sentTypes = <String>[];
+      final device = await _fakeDevice();
+      var hostInfoCount = 0;
+      var runtimeId = 'runtime-1';
+      void emitCurrentLists(_FakeRemoteTransport transport, int seqBase) {
+        final suffix = runtimeId == 'runtime-1' ? 'old' : 'new';
+        transport.emitEncrypted(
+          const RelayEnvelope(
+            type: 'project.list',
+            payload: {
+              'selectedProjectId': 'project-1',
+              'projects': [
+                {'id': 'project-1', 'name': 'Project 1', 'path': '/tmp/p1'},
+              ],
+            },
+          ),
+          seq: seqBase,
+        );
+        transport.emitEncrypted(
+          RelayEnvelope(
+            type: 'terminal.list',
+            payload: {
+              'terminals': [
+                {
+                  'id': 'session-$suffix',
+                  'title': 'Terminal',
+                  'projectId': 'project-1',
+                  'layoutKind': 'split',
+                },
+              ],
+            },
+          ),
+          seq: seqBase + 1,
+        );
+      }
+
+      final fake = _FakeRemoteTransport(
+        device: device,
+        onSent: (transport, envelope) {
+          final type = '${envelope['type'] ?? ''}';
+          sentTypes.add(type);
+          if (type == 'host.info') {
+            hostInfoCount += 1;
+            runtimeId = hostInfoCount < 3 ? 'runtime-1' : 'runtime-2';
+            transport.emitEncrypted(
+              RelayEnvelope(
+                type: 'host.info',
+                payload: _hostInfoPayload(runtimeInstanceId: runtimeId),
+              ),
+              seq: 10 + hostInfoCount,
+            );
+            if (hostInfoCount == 1 || hostInfoCount == 3) {
+              emitCurrentLists(transport, 20 + hostInfoCount);
+            }
+            return;
+          }
+          if (type == 'project.list') {
+            emitCurrentLists(transport, 60 + sentTypes.length * 2);
+            return;
+          }
+          if (type == 'terminal.list') {
+            emitCurrentLists(transport, 80 + sentTypes.length * 2);
+            return;
+          }
+          if (type == 'terminal.buffer') {
+            final sessionId = '${envelope['sessionId'] ?? ''}';
+            transport.emitEncrypted(
+              RelayEnvelope(
+                type: 'terminal.output',
+                sessionId: sessionId,
+                payload: {
+                  'data': sessionId == 'session-new' ? 'new' : 'old',
+                  'buffer': true,
+                  'offset': 0,
+                  'bufferLength': 3,
+                  'outputSeq': 1,
+                },
+              ),
+              seq: 40 + sentTypes.length,
+            );
+          }
+        },
+      );
+
+      await tester.pumpWidget(
+        CoduxFlutterApp(
+          initialDevices: [device],
+          transportFactory: (_) => fake,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Mac'));
+      await tester.pumpAndSettle(const Duration(milliseconds: 300));
+      runtimeId = 'runtime-2';
+      fake.emitEncrypted(
+        RelayEnvelope(
+          type: 'host.info',
+          payload: _hostInfoPayload(runtimeInstanceId: 'runtime-2'),
+        ),
+        seq: 100,
+      );
+      await tester.pumpAndSettle(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final log = CoduxLog.snapshotText();
+      expect(
+        log,
+        contains(
+          'reset runtime reason=host-runtime-instance-changed:runtime-1->runtime-2',
+        ),
+      );
+      expect(log, contains('bind session=session-new project=project-1'));
+      expect(log, contains('request terminal.buffer session=session-new'));
+      expect(
+        log,
+        isNot(
+          contains('bind session=session-old project=project-1 cached=true'),
+        ),
+      );
     },
   );
 
@@ -540,3 +687,29 @@ final class _FakeRemoteTransport implements RemoteTransport {
     return RemoteE2ECrypto.decryptEnvelope(outer: outer, device: device);
   }
 }
+
+Map? _lastPayloadOf(List<Map<String, dynamic>> sent, String type) {
+  for (final envelope in sent.reversed) {
+    if (envelope['type'] == type) return envelope['payload'] as Map?;
+  }
+  return null;
+}
+
+List<String> _sentTypes(List<Map<String, dynamic>> sent) =>
+    sent.map((item) => '${item['type'] ?? ''}').toList();
+
+Map<String, Object?> _hostInfoPayload({
+  String runtimeInstanceId = 'runtime-1',
+}) => {
+  'protocolVersion': remoteProtocolVersion,
+  'runtimeInstanceId': runtimeInstanceId,
+  'capabilities': {
+    'terminalBuffer': {
+      'chunking': true,
+      'maxChars': 200000,
+      'chunkChars': 16384,
+      'requestId': true,
+      'tailSnapshot': true,
+    },
+  },
+};

@@ -1,4 +1,5 @@
 import '../models/remote_models.dart';
+import 'remote_terminal_scope.dart';
 
 class RemoteRuntimeState {
   const RemoteRuntimeState({
@@ -9,6 +10,7 @@ class RemoteRuntimeState {
     this.pendingProjectSelectId,
     this.creatingTerminalProjectId,
     this.lastTerminalIdByProject = const {},
+    this.gitStatusByProject = const {},
   });
 
   final List<ProjectInfo> projects;
@@ -18,6 +20,7 @@ class RemoteRuntimeState {
   final String? pendingProjectSelectId;
   final String? creatingTerminalProjectId;
   final Map<String, String> lastTerminalIdByProject;
+  final Map<String, RemoteGitStatusInfo> gitStatusByProject;
 
   RemoteRuntimeState copyWith({
     List<ProjectInfo>? projects,
@@ -27,6 +30,7 @@ class RemoteRuntimeState {
     Object? pendingProjectSelectId = _unset,
     Object? creatingTerminalProjectId = _unset,
     Map<String, String>? lastTerminalIdByProject,
+    Map<String, RemoteGitStatusInfo>? gitStatusByProject,
   }) => RemoteRuntimeState(
     projects: projects ?? this.projects,
     terminals: terminals ?? this.terminals,
@@ -44,6 +48,7 @@ class RemoteRuntimeState {
         : creatingTerminalProjectId as String?,
     lastTerminalIdByProject:
         lastTerminalIdByProject ?? this.lastTerminalIdByProject,
+    gitStatusByProject: gitStatusByProject ?? this.gitStatusByProject,
   );
 }
 
@@ -86,6 +91,32 @@ class RemoteRuntimeStore {
   String? get creatingTerminalProjectId => _state.creatingTerminalProjectId;
   Map<String, String> get lastTerminalIdByProject =>
       _state.lastTerminalIdByProject;
+  RemoteGitStatusInfo? gitStatusForProject(String projectId) =>
+      _state.gitStatusByProject[projectId];
+  RemoteGitStatusInfo? get selectedGitStatus {
+    final projectId = _state.selectedProjectId;
+    return projectId == null ? null : _state.gitStatusByProject[projectId];
+  }
+
+  RemoteTerminalScope? terminalScopeForProject(String projectId) {
+    return remoteTerminalScopeForProject(
+      projectId: projectId,
+      projects: _state.projects,
+    );
+  }
+
+  RemoteTerminalScope? terminalScopeForSession(
+    String sessionId, {
+    TerminalInfo? terminal,
+  }) {
+    return remoteTerminalScopeForSession(
+      sessionId: sessionId,
+      projects: _state.projects,
+      terminals: _state.terminals,
+      selectedProjectId: _state.selectedProjectId,
+      terminal: terminal,
+    );
+  }
 
   void reset({bool keepProjects = false}) {
     final projects = keepProjects ? _state.projects : const <ProjectInfo>[];
@@ -203,28 +234,51 @@ class RemoteRuntimeStore {
     required bool terminalVisible,
   }) {
     final projectChanged = _state.selectedProjectId != project.id;
+    final previousProjectId = _state.selectedProjectId;
     final lastByProject = Map<String, String>.from(
       _state.lastTerminalIdByProject,
     );
-    if (projectChanged && _state.activeSessionId != null) {
-      lastByProject.removeWhere(
-        (_, terminalId) => terminalId == _state.activeSessionId,
-      );
+    if (projectChanged &&
+        previousProjectId != null &&
+        _state.activeSessionId != null &&
+        _state.terminals.any(
+          (item) =>
+              item.id == _state.activeSessionId &&
+              item.projectId == previousProjectId &&
+              _isAccessibleTerminal(item),
+        )) {
+      lastByProject[previousProjectId] = _state.activeSessionId!;
+    }
+    final existing = terminalVisible
+        ? _state.terminals
+              .where(
+                (item) =>
+                    item.projectId == project.id && _isAccessibleTerminal(item),
+              )
+              .toList()
+        : const <TerminalInfo>[];
+    final terminal = existing.isEmpty
+        ? null
+        : _preferredTerminalForProject(project.id, existing);
+    if (terminal != null) {
+      lastByProject[project.id] = terminal.id;
     }
     _state = _state.copyWith(
       selectedProjectId: project.id,
-      activeSessionId: projectChanged && terminalVisible
-          ? null
-          : _state.activeSessionId,
+      activeSessionId:
+          terminal?.id ??
+          (projectChanged && terminalVisible ? null : _state.activeSessionId),
       pendingProjectSelectId: project.id,
       lastTerminalIdByProject: lastByProject,
     );
     return RemoteRuntimePlan(
       stateChanged: true,
-      clearTerminal: projectChanged && terminalVisible,
       resetTerminalInput: projectChanged && terminalVisible,
       resetTerminalBuffer: projectChanged && terminalVisible,
       requestProjectSelectId: project.id,
+      bindSessionId: terminal?.id,
+      bindFullBuffer: terminal != null,
+      flushTerminalInput: terminal != null,
     );
   }
 
@@ -237,9 +291,7 @@ class RemoteRuntimeStore {
         !_state.projects.any((item) => item.id == selected)) {
       return const RemoteRuntimePlan();
     }
-    _state = _state.copyWith(
-      selectedProjectId: selected,
-    );
+    _state = _state.copyWith(selectedProjectId: selected);
     return const RemoteRuntimePlan(
       stateChanged: true,
       requestTerminalList: true,
@@ -368,6 +420,15 @@ class RemoteRuntimeStore {
       bindFullBuffer: true,
       flushTerminalInput: true,
     );
+  }
+
+  RemoteRuntimePlan applyGitStatus(RemoteGitStatusInfo status) {
+    if (status.projectId.isEmpty) return const RemoteRuntimePlan();
+    final next = Map<String, RemoteGitStatusInfo>.from(
+      _state.gitStatusByProject,
+    )..[status.projectId] = status;
+    _state = _state.copyWith(gitStatusByProject: next);
+    return const RemoteRuntimePlan(stateChanged: true);
   }
 
   ProjectInfo? selectedProject() {

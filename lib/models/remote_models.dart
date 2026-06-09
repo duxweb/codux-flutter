@@ -467,6 +467,80 @@ class RemoteFileEntry {
       );
 }
 
+class RemoteGitStatusInfo {
+  const RemoteGitStatusInfo({
+    required this.projectId,
+    required this.projectPath,
+    required this.branch,
+    this.upstream,
+    this.ahead = 0,
+    this.behind = 0,
+    this.staged = 0,
+    this.unstaged = 0,
+    this.untracked = 0,
+    this.changes = 0,
+    this.isRepository = false,
+    this.error,
+    this.changedFiles = const [],
+  });
+
+  final String projectId;
+  final String projectPath;
+  final String branch;
+  final String? upstream;
+  final int ahead;
+  final int behind;
+  final int staged;
+  final int unstaged;
+  final int untracked;
+  final int changes;
+  final bool isRepository;
+  final String? error;
+  final List<RemoteGitFileStatus> changedFiles;
+
+  factory RemoteGitStatusInfo.fromJson(Map<String, dynamic> json) =>
+      RemoteGitStatusInfo(
+        projectId: '${json['projectId'] ?? ''}',
+        projectPath: '${json['projectPath'] ?? ''}',
+        branch: '${json['branch'] ?? ''}',
+        upstream: json['upstream']?.toString(),
+        ahead: _intValue(json['ahead']) ?? 0,
+        behind: _intValue(json['behind']) ?? 0,
+        staged: _intValue(json['staged']) ?? 0,
+        unstaged: _intValue(json['unstaged']) ?? 0,
+        untracked: _intValue(json['untracked']) ?? 0,
+        changes: _intValue(json['changes']) ?? 0,
+        isRepository: json['isRepository'] == true,
+        error: json['error']?.toString(),
+        changedFiles: (json['changedFiles'] as List<dynamic>? ?? [])
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  RemoteGitFileStatus.fromJson(Map<String, dynamic>.from(item)),
+            )
+            .toList(),
+      );
+}
+
+class RemoteGitFileStatus {
+  const RemoteGitFileStatus({
+    required this.path,
+    required this.indexStatus,
+    required this.worktreeStatus,
+  });
+
+  final String path;
+  final String indexStatus;
+  final String worktreeStatus;
+
+  factory RemoteGitFileStatus.fromJson(Map<String, dynamic> json) =>
+      RemoteGitFileStatus(
+        path: '${json['path'] ?? ''}',
+        indexStatus: '${json['indexStatus'] ?? ''}',
+        worktreeStatus: '${json['worktreeStatus'] ?? ''}',
+      );
+}
+
 class AIStatsInfo {
   const AIStatsInfo({
     required this.projectName,

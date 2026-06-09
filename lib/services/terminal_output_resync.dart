@@ -18,12 +18,14 @@ TerminalOutputResyncResult observeTerminalOutputForResync({
   required bool isBuffer,
   required int? outputSeq,
   required int? offset,
+  bool resetsSequence = false,
 }) {
   final sequence = sequencer.observe(
     sessionId: sessionId,
     isBuffer: isBuffer,
     outputSeq: outputSeq,
     offset: offset,
+    resetsSequence: resetsSequence,
   );
   switch (sequence.action) {
     case TerminalOutputSequenceAction.accept:
@@ -37,12 +39,6 @@ TerminalOutputResyncResult observeTerminalOutputForResync({
       return TerminalOutputResyncResult(
         render: false,
         requestFullBuffer: false,
-        ack: outputSeq,
-      );
-    case TerminalOutputSequenceAction.gap:
-      return TerminalOutputResyncResult(
-        render: false,
-        requestFullBuffer: true,
         ack: outputSeq,
       );
   }
