@@ -4,6 +4,27 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-06-09
+
+### Added
+
+- Added v3.1 host capability parsing, terminal-buffer chunk assembly, per-session terminal replicas, terminal subscription scopes, and bounded history rendering for large terminal output.
+- Added reliable terminal input helpers, output sequencing/resync helpers, upload metadata helpers, and protocol payload codecs for future cross-device runtime domains.
+- Added mobile update checking, refined debug-log export, and updated controller-oriented documentation for Codux Mobile.
+
+### Changed
+
+- Split the mobile remote workspace into dedicated runtime store, sync, project, terminal, device, file, logging, settings, and widget layers so UI only renders state and emits user intent.
+- Reworked terminal screens so active project/session selection mounts data from local replicas instead of deciding whether protocol messages should be accepted.
+- Reworked project, file, worktree, device action, debug-log, and update UI into focused widgets backed by service/controller tests.
+
+### Fixed
+
+- Fixed intermittent blank terminal panes during first entry, project switching, desktop host restarts, and rapid split selection.
+- Fixed stale mobile terminal cache after host restart by separating host-confirmed runtime state from UI-mounted terminal panes.
+- Fixed terminal-history recovery instability on slower networks with duplicate-chunk protection, out-of-order assembly, input retry, and output resync helpers.
+- Fixed noisy sync/list refresh behavior so repeated project and terminal list responses do not repeatedly trigger conflicting UI state changes.
+
 ## [1.7.1] - 2026-06-08
 
 ### Changed
