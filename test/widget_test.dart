@@ -67,12 +67,15 @@ void main() {
             );
             return;
           }
-          if (type == 'terminal.buffer') {
+          if (type == 'terminal.buffer' || type == 'terminal.subscribe') {
+            final sessionId = type == 'terminal.subscribe'
+                ? _sessionIdForSubscribe(envelope, {'project-1': 'session-1'})
+                : '${envelope['sessionId'] ?? 'session-1'}';
             transport.emitEncrypted(
-              const RelayEnvelope(
+              RelayEnvelope(
                 type: 'terminal.output',
-                sessionId: 'session-1',
-                payload: {
+                sessionId: sessionId,
+                payload: const {
                   'data': 'ready',
                   'buffer': true,
                   'offset': 0,
@@ -106,14 +109,12 @@ void main() {
         ),
       );
       expect(log, contains('bind session=session-1 project=project-1'));
-      expect(log, contains('request terminal.buffer session=session-1'));
-      final bufferPayload = _lastPayloadOf(sent, 'terminal.buffer');
-      expect(bufferPayload?['projectId'], 'project-1');
-      expect(bufferPayload?['projectPath'], '/tmp/p1');
-      expect(bufferPayload?['requestId'], isA<String>());
-      expect(bufferPayload?['tail'], isTrue);
-      expect(bufferPayload?.containsKey('cols'), isFalse);
-      expect(bufferPayload?.containsKey('rows'), isFalse);
+      expect(log, isNot(contains('request terminal.buffer session=session-1')));
+      final subscribePayload = _lastPayloadOf(sent, 'terminal.subscribe');
+      expect(subscribePayload?['projectId'], 'project-1');
+      expect(subscribePayload?['baseline'], isTrue);
+      expect(subscribePayload?['maxChars'], isA<int>());
+      expect(subscribePayload?['chunkChars'], isA<int>());
       expect(_sentTypes(sent), contains('terminal.viewport.claim'));
       expect(_sentTypes(sent), isNot(contains('terminal.resize')));
     },
@@ -166,12 +167,15 @@ void main() {
             );
             return;
           }
-          if (type == 'terminal.buffer') {
+          if (type == 'terminal.buffer' || type == 'terminal.subscribe') {
+            final sessionId = type == 'terminal.subscribe'
+                ? _sessionIdForSubscribe(envelope, {'project-2': 'session-2'})
+                : '${envelope['sessionId'] ?? 'session-2'}';
             transport.emitEncrypted(
-              const RelayEnvelope(
+              RelayEnvelope(
                 type: 'terminal.output',
-                sessionId: 'session-2',
-                payload: {
+                sessionId: sessionId,
+                payload: const {
                   'data': 'ready',
                   'buffer': true,
                   'offset': 0,
@@ -199,15 +203,13 @@ void main() {
       final log = CoduxLog.snapshotText();
       expect(log, contains('project.list count=2 selected=project-2'));
       expect(log, contains('bind session=session-2 project=project-2'));
-      expect(log, contains('request terminal.buffer session=session-2'));
+      expect(log, isNot(contains('request terminal.buffer session=session-2')));
       expect(sentTypes.where((type) => type == 'project.select'), isEmpty);
-      final bufferPayload = _lastPayloadOf(sent, 'terminal.buffer');
-      expect(bufferPayload?['projectId'], 'project-2');
-      expect(bufferPayload?['projectPath'], '/tmp/p2');
-      expect(bufferPayload?['requestId'], isA<String>());
-      expect(bufferPayload?['tail'], isTrue);
-      expect(bufferPayload?.containsKey('cols'), isFalse);
-      expect(bufferPayload?.containsKey('rows'), isFalse);
+      final subscribePayload = _lastPayloadOf(sent, 'terminal.subscribe');
+      expect(subscribePayload?['projectId'], 'project-2');
+      expect(subscribePayload?['baseline'], isTrue);
+      expect(subscribePayload?['maxChars'], isA<int>());
+      expect(subscribePayload?['chunkChars'], isA<int>());
       expect(sentTypes, contains('terminal.viewport.claim'));
       expect(sentTypes, isNot(contains('terminal.resize')));
     },
@@ -296,12 +298,18 @@ void main() {
             );
             return;
           }
-          if (type == 'terminal.buffer') {
+          if (type == 'terminal.buffer' || type == 'terminal.subscribe') {
+            final sessionId = type == 'terminal.subscribe'
+                ? _sessionIdForSubscribe(envelope, {
+                    'project-1': 'session-1',
+                    'project-2': 'session-2',
+                  })
+                : '${envelope['sessionId'] ?? 'session-2'}';
             transport.emitEncrypted(
               RelayEnvelope(
                 type: 'terminal.output',
-                sessionId: '${envelope['sessionId'] ?? ''}',
-                payload: {
+                sessionId: sessionId,
+                payload: const {
                   'data': 'ready',
                   'buffer': true,
                   'offset': 0,
@@ -346,12 +354,10 @@ void main() {
         ),
       );
       expect(log, contains('bind session=session-2 project=project-2'));
-      expect(log, contains('request terminal.buffer session=session-2'));
-      final bufferPayload = _lastPayloadOf(sent, 'terminal.buffer');
-      expect(bufferPayload?['projectId'], 'project-2');
-      expect(bufferPayload?['projectPath'], '/tmp/p2');
-      expect(bufferPayload?.containsKey('cols'), isFalse);
-      expect(bufferPayload?.containsKey('rows'), isFalse);
+      expect(log, isNot(contains('request terminal.buffer session=session-2')));
+      final subscribePayload = _lastPayloadOf(sent, 'terminal.subscribe');
+      expect(subscribePayload?['projectId'], 'project-2');
+      expect(subscribePayload?['baseline'], isTrue);
       expect(sentTypes, contains('terminal.viewport.claim'));
       expect(sentTypes, isNot(contains('terminal.resize')));
     },
@@ -402,12 +408,15 @@ void main() {
             );
             return;
           }
-          if (type == 'terminal.buffer') {
+          if (type == 'terminal.buffer' || type == 'terminal.subscribe') {
+            final sessionId = type == 'terminal.subscribe'
+                ? _sessionIdForSubscribe(envelope, {'project-1': 'session-1'})
+                : '${envelope['sessionId'] ?? 'session-1'}';
             transport.emitEncrypted(
-              const RelayEnvelope(
+              RelayEnvelope(
                 type: 'terminal.output',
-                sessionId: 'session-1',
-                payload: {
+                sessionId: sessionId,
+                payload: const {
                   'data': 'ready',
                   'buffer': true,
                   'offset': 0,
@@ -437,6 +446,95 @@ void main() {
       expect(log, contains('project.list count=1 selected=project-1'));
       expect(log, contains('terminal.list count=1'));
       expect(log, contains('bind session=session-1 project=project-1'));
+    },
+  );
+
+  testWidgets(
+    'foreground recovery resumes from cached remote pty session without full history reload',
+    (WidgetTester tester) async {
+      CoduxLog.setLevelName('debug');
+      CoduxLog.clear();
+      final sent = <Map<String, dynamic>>[];
+      final device = await _fakeDevice();
+      final fake = _FakeRemoteTransport(
+        device: device,
+        onSent: (transport, envelope) {
+          final type = '${envelope['type'] ?? ''}';
+          sent.add(envelope);
+          if (type == 'host.info') {
+            transport.emitEncrypted(
+              const RelayEnvelope(
+                type: 'project.list',
+                payload: {
+                  'selectedProjectId': 'project-1',
+                  'projects': [
+                    {'id': 'project-1', 'name': 'Project 1', 'path': '/tmp/p1'},
+                  ],
+                },
+              ),
+            );
+            transport.emitEncrypted(
+              const RelayEnvelope(
+                type: 'terminal.list',
+                payload: {
+                  'terminals': [
+                    {
+                      'id': 'session-1',
+                      'title': 'Terminal',
+                      'projectId': 'project-1',
+                      'layoutKind': 'split',
+                    },
+                  ],
+                },
+              ),
+            );
+            transport.emitEncrypted(
+              RelayEnvelope(type: 'host.info', payload: _hostInfoPayload()),
+            );
+            return;
+          }
+          if (type == 'terminal.buffer' || type == 'terminal.subscribe') {
+            final sessionId = type == 'terminal.subscribe'
+                ? _sessionIdForSubscribe(envelope, {'project-1': 'session-1'})
+                : '${envelope['sessionId'] ?? 'session-1'}';
+            transport.emitEncrypted(
+              RelayEnvelope(
+                type: 'terminal.output',
+                sessionId: sessionId,
+                payload: const {
+                  'data': 'ready',
+                  'buffer': true,
+                  'offset': 0,
+                  'bufferLength': 5,
+                  'outputSeq': 1,
+                },
+              ),
+            );
+          }
+        },
+      );
+
+      await tester.pumpWidget(
+        CoduxFlutterApp(
+          initialDevices: [device],
+          transportFactory: (_) => fake,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Mac'));
+      await tester.pumpAndSettle(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      sent.clear();
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final bufferPayload = _lastPayloadOf(sent, 'terminal.buffer');
+      expect(bufferPayload?['tail'], isFalse);
+      expect(bufferPayload?['offset'], 5);
+      expect(bufferPayload?['resumeFromSeq'], 1);
     },
   );
 
@@ -509,8 +607,10 @@ void main() {
             emitCurrentLists(transport, 80 + sentTypes.length * 2);
             return;
           }
-          if (type == 'terminal.buffer') {
-            final sessionId = '${envelope['sessionId'] ?? ''}';
+          if (type == 'terminal.buffer' || type == 'terminal.subscribe') {
+            final sessionId = type == 'terminal.subscribe'
+                ? (runtimeId == 'runtime-1' ? 'session-old' : 'session-new')
+                : '${envelope['sessionId'] ?? ''}';
             transport.emitEncrypted(
               RelayEnvelope(
                 type: 'terminal.output',
@@ -558,7 +658,7 @@ void main() {
         ),
       );
       expect(log, contains('bind session=session-new project=project-1'));
-      expect(log, contains('request terminal.buffer session=session-new'));
+      expect(log, isNot(contains('request terminal.buffer session=session-new')));
       expect(
         log,
         isNot(
@@ -697,6 +797,15 @@ Map? _lastPayloadOf(List<Map<String, dynamic>> sent, String type) {
 
 List<String> _sentTypes(List<Map<String, dynamic>> sent) =>
     sent.map((item) => '${item['type'] ?? ''}').toList();
+
+String _sessionIdForSubscribe(
+  Map<String, dynamic> envelope,
+  Map<String, String> sessionIdByProject,
+) {
+  final payload = envelope['payload'];
+  final projectId = payload is Map ? '${payload['projectId'] ?? ''}' : '';
+  return sessionIdByProject[projectId] ?? sessionIdByProject.values.first;
+}
 
 Map<String, Object?> _hostInfoPayload({
   String runtimeInstanceId = 'runtime-1',

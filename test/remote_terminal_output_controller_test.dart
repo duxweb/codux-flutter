@@ -41,6 +41,39 @@ void main() {
     },
   );
 
+  test('retained tail history can start from a non-zero safe offset', () {
+    final controller = RemoteTerminalOutputController(maxBufferChars: 4);
+
+    controller.bindSession('session-1', requireSnapshot: true);
+
+    final first = controller.accept(
+      _terminalBuffer('tail', offset: 96, bufferLength: 104, truncated: true),
+      activeSessionId: 'session-1',
+    );
+
+    expect(_kinds(first), [
+      RemoteTerminalOutputEffectKind.markBufferReceived,
+      RemoteTerminalOutputEffectKind.loading,
+      RemoteTerminalOutputEffectKind.requestBufferPage,
+      RemoteTerminalOutputEffectKind.ack,
+    ]);
+    expect(first[2].offset, 100);
+    expect(controller.bufferOffset('session-1'), 100);
+
+    final second = controller.accept(
+      _terminalBuffer('next', offset: 100, bufferLength: 104, truncated: false),
+      activeSessionId: 'session-1',
+    );
+
+    expect(_kinds(second), [
+      RemoteTerminalOutputEffectKind.renderSnapshot,
+      RemoteTerminalOutputEffectKind.ack,
+    ]);
+    expect(second.first.data, 'tailnext');
+    expect(controller.cachedOutput('session-1'), 'tailnext');
+    expect(controller.bufferOffset('session-1'), 104);
+  });
+
   test('out of order snapshot page asks for a fresh full buffer', () {
     final controller = RemoteTerminalOutputController(maxBufferChars: 4);
 
@@ -161,6 +194,42 @@ void main() {
     ]);
     expect(controller.cachedOutput('session-1'), 'new');
   });
+
+  test(
+    'full buffer request replaces cache even when recent history offset is non-zero',
+    () {
+      final controller = RemoteTerminalOutputController(maxBufferChars: 4);
+
+      controller.bindSession('session-1', requireSnapshot: false);
+      controller.accept(
+        _liveOutput('stale', outputSeq: 1),
+        activeSessionId: 'session-1',
+      );
+      controller.startBufferRequest(
+        'session-1',
+        'request-1',
+        requireSnapshot: true,
+      );
+
+      final result = controller.accept(
+        _terminalBuffer(
+          'tail',
+          offset: 96,
+          bufferLength: 100,
+          truncated: false,
+          requestId: 'request-1',
+        ),
+        activeSessionId: 'session-1',
+      );
+
+      expect(_kinds(result), [
+        RemoteTerminalOutputEffectKind.renderSnapshot,
+        RemoteTerminalOutputEffectKind.ack,
+      ]);
+      expect(controller.cachedOutput('session-1'), 'tail');
+      expect(controller.bufferOffset('session-1'), 100);
+    },
+  );
 
   test('tail snapshot renders as current state without requesting pages', () {
     final controller = RemoteTerminalOutputController(maxBufferChars: 4);

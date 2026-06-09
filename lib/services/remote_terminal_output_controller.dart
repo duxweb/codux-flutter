@@ -1,6 +1,6 @@
 import '../models/remote_models.dart';
 import 'log_service.dart';
-import 'remote_terminal_replica.dart';
+import 'remote_pty_session.dart';
 import 'terminal_buffer_assembler.dart';
 import 'terminal_output_resync.dart';
 import 'terminal_output_sequencer.dart';
@@ -111,68 +111,78 @@ class RemoteTerminalOutputController {
   RemoteTerminalOutputController({
     int maxBufferChars = 200000,
     int maxCachedChars = 2000000,
-  }) : _maxCachedChars = maxCachedChars,
+  }) : _ptySessions = RemotePtySessionStore<RelayEnvelope>(
+         maxCachedChars: maxCachedChars,
+       ),
        _assembler = TerminalBufferAssembler(maxChars: maxBufferChars);
 
-  final int _maxCachedChars;
+  final RemotePtySessionStore<RelayEnvelope> _ptySessions;
   final TerminalBufferAssembler _assembler;
   final TerminalOutputSequencer _sequencer = TerminalOutputSequencer();
-  final RemoteTerminalReplica<RelayEnvelope> _replica =
-      RemoteTerminalReplica<RelayEnvelope>();
-  final Map<String, String> _cacheBySession = {};
-  final Map<String, int> _bufferLengthBySession = {};
   final Map<String, String> _activeBufferRequestBySession = {};
 
-  String? cachedOutput(String sessionId) => _cacheBySession[sessionId];
+  String? cachedOutput(String sessionId) => _ptySessions.content(sessionId);
 
-  int bufferOffset(String sessionId) => _bufferLengthBySession[sessionId] ?? 0;
+  bool hasCachedOutput(String sessionId) =>
+      _ptySessions.content(sessionId) != null;
 
-  int sequenceFor(String sessionId) => _sequencer.sequenceFor(sessionId);
+  int bufferOffset(String sessionId) => _ptySessions.bufferLength(sessionId);
+
+  int sequenceFor(String sessionId) => _ptySessions.sequence(sessionId);
 
   String? activeBufferRequestId(String sessionId) =>
       _activeBufferRequestBySession[sessionId];
 
-  void startBufferRequest(String sessionId, String requestId) {
+  void startBufferRequest(
+    String sessionId,
+    String requestId, {
+    bool requireSnapshot = false,
+  }) {
     if (sessionId.trim().isEmpty || requestId.trim().isEmpty) return;
     _activeBufferRequestBySession[sessionId] = requestId;
     _assembler.remove(sessionId);
+    if (requireSnapshot) {
+      _ptySessions.session(sessionId).requireSnapshot();
+    }
   }
 
   void bindSession(String sessionId, {required bool requireSnapshot}) {
     if (sessionId.trim().isEmpty) return;
     _sequencer.remove(sessionId);
     _assembler.remove(sessionId);
-    _replica.bindSession(sessionId, requireSnapshot: requireSnapshot);
+    final session = _ptySessions.session(sessionId);
+    if (requireSnapshot) {
+      session.requireSnapshot();
+    } else {
+      session.resetTransient();
+    }
   }
 
   void removeSession(String sessionId) {
-    _cacheBySession.remove(sessionId);
-    _bufferLengthBySession.remove(sessionId);
+    _ptySessions.remove(sessionId);
     _activeBufferRequestBySession.remove(sessionId);
     _assembler.remove(sessionId);
     _sequencer.remove(sessionId);
-    _replica.remove(sessionId);
   }
 
   void resetTransient() {
     _assembler.reset();
-    _replica.reset();
     _activeBufferRequestBySession.clear();
   }
 
   void resetSessionTransient(String sessionId, {bool resetSequence = false}) {
     _assembler.remove(sessionId);
     if (resetSequence) _sequencer.remove(sessionId);
-    _replica.remove(sessionId);
+    _ptySessions
+        .session(sessionId)
+        .resetTransient(resetSequence: resetSequence);
   }
 
   void resetAll() {
-    _cacheBySession.clear();
-    _bufferLengthBySession.clear();
+    _ptySessions.clear();
     _activeBufferRequestBySession.clear();
     _assembler.reset();
     _sequencer.reset();
-    _replica.reset();
   }
 
   List<RemoteTerminalOutputEffect> accept(
@@ -242,13 +252,10 @@ class RemoteTerminalOutputController {
       );
     }
 
+    final ptySession = _ptySessions.session(sessionId);
     if (!replayingHeldLive &&
-        _replica.holdLiveOutput(
-          sessionId: sessionId,
-          isBuffer: isBuffer,
-          outputSeq: outputSeq,
-          output: message,
-        )) {
+        !isBuffer &&
+        ptySession.holdLive(sequence: outputSeq, output: message)) {
       CoduxLog.debug(
         '[codux-flutter-output] hold live output before snapshot seq=${outputSeq ?? 0} session=$sessionId',
       );
@@ -269,7 +276,7 @@ class RemoteTerminalOutputController {
         offset: null,
       );
       if (resync.render && raw.isNotEmpty) {
-        _appendCache(sessionId, raw, decoded.bufferLength);
+        _appendLiveToSession(sessionId, raw, decoded.bufferLength, resync.ack);
       }
       return [
         RemoteTerminalOutputEffect.ack(
@@ -327,13 +334,12 @@ class RemoteTerminalOutputController {
       final isPagedSnapshot =
           decoded.screenSnapshot ||
           decoded.tail ||
-          _replica.isAwaitingSnapshot(sessionId) ||
+          ptySession.awaitingSnapshot ||
           offset == 0;
       var renderData = raw;
       if (isPagedSnapshot) {
         if (!decoded.tail && !decoded.screenSnapshot) {
-          final page = _replica.acceptSnapshotPage(
-            sessionId: sessionId,
+          final page = ptySession.acceptSnapshotPage(
             data: raw,
             offset: offset,
             bufferLength: decoded.bufferLength,
@@ -362,7 +368,7 @@ class RemoteTerminalOutputController {
             return effects;
           }
           if (!page.ready) {
-            _bufferLengthBySession[sessionId] = page.nextOffset;
+            _setSessionBufferLength(sessionId, page.nextOffset);
             if (!isActiveSession) {
               effects.add(
                 RemoteTerminalOutputEffect.ack(
@@ -400,18 +406,19 @@ class RemoteTerminalOutputController {
           renderData = page.data;
         }
         skipBufferTailWrite = true;
-        heldLive = _replica.acceptSnapshot(
-          sessionId: sessionId,
-          isBuffer: true,
-          offset: 0,
-          truncated: false,
-          outputSeq: outputSeq,
+        heldLive = _replaceSessionFromSnapshot(
+          sessionId,
+          renderData,
+          decoded.screenSnapshot
+              ? renderData.runes.length
+              : decoded.bufferLength,
+          outputSeq,
         );
       }
 
-      final localCacheEmpty = (_cacheBySession[sessionId] ?? '').isEmpty;
+      final localCacheEmpty = (_ptySessions.content(sessionId) ?? '').isEmpty;
       if (!isPagedSnapshot && localCacheEmpty) {
-        _bufferLengthBySession[sessionId] = 0;
+        _setSessionBufferLength(sessionId, 0);
         if (!isActiveSession) {
           effects.add(
             RemoteTerminalOutputEffect.ack(
@@ -434,14 +441,17 @@ class RemoteTerminalOutputController {
         return effects;
       }
 
-      if (isPagedSnapshot || !_cacheBySession.containsKey(sessionId)) {
-        _replaceCache(
-          sessionId,
-          renderData,
-          decoded.screenSnapshot
-              ? renderData.runes.length
-              : decoded.bufferLength,
-        );
+      if (isPagedSnapshot || _ptySessions.content(sessionId) == null) {
+        if (!isPagedSnapshot) {
+          _replaceSessionFromSnapshot(
+            sessionId,
+            renderData,
+            decoded.screenSnapshot
+                ? renderData.runes.length
+                : decoded.bufferLength,
+            outputSeq,
+          );
+        }
         _activeBufferRequestBySession.remove(sessionId);
         if (isActiveSession) {
           effects.add(
@@ -452,7 +462,7 @@ class RemoteTerminalOutputController {
           );
         }
       } else {
-        _appendCache(sessionId, raw, decoded.bufferLength);
+        _appendLiveToSession(sessionId, raw, decoded.bufferLength, resync.ack);
         _activeBufferRequestBySession.remove(sessionId);
         if (isActiveSession) {
           effects.add(RemoteTerminalOutputEffect.markBufferReceived(sessionId));
@@ -464,7 +474,7 @@ class RemoteTerminalOutputController {
 
     if (raw.isNotEmpty) {
       if (!isBuffer) {
-        _appendCache(sessionId, raw, decoded.bufferLength);
+        _appendLiveToSession(sessionId, raw, decoded.bufferLength, resync.ack);
         if (isActiveSession) {
           effects.add(
             RemoteTerminalOutputEffect.writeData(
@@ -476,7 +486,7 @@ class RemoteTerminalOutputController {
         }
       } else if (!skipBufferTailWrite &&
           (decoded.offset ?? 0) > 0 &&
-          !_replica.isAwaitingSnapshot(sessionId)) {
+          !ptySession.awaitingSnapshot) {
         if (isActiveSession) {
           effects.add(
             RemoteTerminalOutputEffect.writeData(
@@ -513,31 +523,46 @@ class RemoteTerminalOutputController {
   }
 
   RemoteTerminalOutputEffect _prepareFullBufferRequest(String sessionId) {
-    _bufferLengthBySession[sessionId] = 0;
+    _setSessionBufferLength(sessionId, 0);
     _activeBufferRequestBySession.remove(sessionId);
-    _replica.bindSession(sessionId, requireSnapshot: true);
+    _ptySessions.session(sessionId).requireSnapshot();
     return RemoteTerminalOutputEffect.requestFullBuffer(sessionId);
   }
 
-  void _replaceCache(String sessionId, String data, int? bufferLength) {
-    _cacheBySession[sessionId] = data;
-    if (bufferLength != null) {
-      _bufferLengthBySession[sessionId] = bufferLength;
-    }
+  List<RelayEnvelope> _replaceSessionFromSnapshot(
+    String sessionId,
+    String data,
+    int? bufferLength,
+    int? outputSeq,
+  ) {
+    return _ptySessions
+        .session(sessionId)
+        .replaceFromSnapshot(
+          content: data,
+          bufferLength: bufferLength,
+          sequence: outputSeq,
+        );
   }
 
-  void _appendCache(String sessionId, String data, int? bufferLength) {
-    if (data.isNotEmpty) {
-      final current = _cacheBySession[sessionId] ?? '';
-      var next = current + data;
-      if (next.length > _maxCachedChars) {
-        next = next.substring(next.length - _maxCachedChars);
-      }
-      _cacheBySession[sessionId] = next;
-    }
-    if (bufferLength != null) {
-      _bufferLengthBySession[sessionId] = bufferLength;
-    }
+  void _appendLiveToSession(
+    String sessionId,
+    String data,
+    int? bufferLength,
+    int? outputSeq,
+  ) {
+    _ptySessions
+        .session(sessionId)
+        .appendLive(
+          data: data,
+          bufferLength: bufferLength,
+          sequence: outputSeq,
+        );
+  }
+
+  void _setSessionBufferLength(String sessionId, int bufferLength) {
+    _ptySessions
+        .session(sessionId)
+        .appendLive(data: '', bufferLength: bufferLength, sequence: null);
   }
 }
 

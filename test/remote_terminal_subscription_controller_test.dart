@@ -5,10 +5,18 @@ void main() {
   test('subscribes first project without unsubscribe', () {
     final controller = RemoteTerminalSubscriptionController();
 
-    final plan = controller.replaceProject('project-a');
+    final plan = controller.replaceProject(
+      'project-a',
+      maxChars: 65536,
+      chunkChars: 16384,
+    );
 
     expect(plan.unsubscribe, isNull);
     expect(plan.subscribe?.type, 'terminal.subscribe');
+    final payload = plan.subscribe?.payload as Map;
+    expect(payload['baseline'], isTrue);
+    expect(payload['maxChars'], 65536);
+    expect(payload['chunkChars'], 16384);
     expect(plan.subscribeProjectId, 'project-a');
     expect(controller.projectId, 'project-a');
   });

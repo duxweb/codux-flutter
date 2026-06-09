@@ -35,6 +35,7 @@ import '../services/remote_terminal_subscription_controller.dart';
 import '../services/remote_transport.dart';
 import '../services/remote_transport_state_controller.dart';
 import '../services/storage_service.dart';
+import '../services/terminal_buffer_request.dart';
 import '../services/terminal_buffer_retry.dart';
 import '../services/terminal_input_batcher.dart';
 import '../services/terminal_input_payload.dart';
@@ -646,7 +647,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     _restoreVisibleTerminalFromCache();
     _claimTerminalViewport();
     _flushPendingTerminalResize(force: true);
-    _requestBufferIfReady(force: true);
+    _requestBufferForCurrentSession(force: true, preferFull: true);
     _terminalInputBatcher.flush();
     _startLatencyProbe();
   }
@@ -1308,12 +1309,23 @@ class _CoduxHomePageState extends State<CoduxHomePage>
     );
   }
 
-  void _replaceTerminalProjectSubscription(
+  bool _replaceTerminalProjectSubscription(
     String projectId, {
     required String reason,
   }) {
-    final plan = _terminalSubscriptions.replaceProject(projectId);
-    if (!plan.hasWork) return;
+    final maxChars = _terminalBufferCapability.maxChars.clamp(
+      1,
+      _terminalBufferMaxChars,
+    );
+    final plan = _terminalSubscriptions.replaceProject(
+      projectId,
+      baseline: true,
+      maxChars: maxChars,
+      chunkChars: _terminalBufferCapability.chunking
+          ? _terminalBufferCapability.chunkChars
+          : null,
+    );
+    if (!plan.hasWork) return false;
     final unsubscribe = plan.unsubscribe;
     if (unsubscribe != null) {
       CoduxLog.debug(
@@ -1322,12 +1334,15 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _send(unsubscribe);
     }
     final subscribe = plan.subscribe;
+    var baselineRequested = false;
     if (subscribe != null) {
       CoduxLog.debug(
         '[codux-flutter-terminal] subscribe project=${plan.subscribeProjectId ?? ''} reason=$reason',
       );
       _send(subscribe);
+      baselineRequested = true;
     }
+    return baselineRequested;
   }
 
   void _syncRuntimeViewState() {
@@ -1393,9 +1408,10 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       _sendProjectSelect(plan.requestProjectSelectId!, reason: reason);
     }
     if (plan.bindSessionId != null) {
+      var baselineRequested = false;
       final selectedProjectId = _selectedProjectId;
       if (selectedProjectId != null) {
-        _replaceTerminalProjectSubscription(
+        baselineRequested = _replaceTerminalProjectSubscription(
           selectedProjectId,
           reason: 'bind-$reason',
         );
@@ -1404,13 +1420,18 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       CoduxLog.info(
         '[codux-flutter-terminal] bind session=${plan.bindSessionId} project=${_selectedProjectId ?? ''} cached=$restored',
       );
+      final needsFullBuffer =
+          plan.bindFullBuffer &&
+          !_terminalOutputController.hasCachedOutput(plan.bindSessionId!);
       _terminalOutputController.bindSession(
         plan.bindSessionId!,
-        requireSnapshot: plan.bindFullBuffer,
+        requireSnapshot: needsFullBuffer,
       );
       _claimTerminalViewport(sessionId: plan.bindSessionId!);
       _flushPendingTerminalResize(force: true);
-      _requestBufferIfReady(force: true, full: plan.bindFullBuffer);
+      if (!baselineRequested) {
+        _requestBufferIfReady(force: true, full: needsFullBuffer);
+      }
       if (plan.flushTerminalInput) {
         _terminalInputBatcher.flush();
       }
@@ -2033,43 +2054,53 @@ class _CoduxHomePageState extends State<CoduxHomePage>
       force: force,
       send: (sessionId) {
         final requestId = _nextTerminalBufferRequestId(sessionId);
-        _terminalOutputController.startBufferRequest(sessionId, requestId);
+        _terminalOutputController.startBufferRequest(
+          sessionId,
+          requestId,
+          requireSnapshot: full,
+        );
         final maxChars = _terminalBufferCapability.maxChars.clamp(
           1,
           _terminalBufferMaxChars,
         );
-        final useTailSnapshot =
-            full &&
-            (_terminalBufferCapability.screenSnapshot ||
-                _terminalBufferCapability.tailSnapshot);
+        final sequenceFor = _terminalOutputController.sequenceFor(sessionId);
         return _sendTerminalEnvelope(
           RelayEnvelope(
             type: 'terminal.buffer',
             sessionId: sessionId,
-            payload: {
-              'requestId': requestId,
-              'tail': useTailSnapshot,
-              'offset': useTailSnapshot || full
-                  ? 0
-                  : _terminalOutputController.bufferOffset(sessionId),
-              'maxChars': maxChars,
-              if (_terminalBufferCapability.chunking)
-                'chunkChars': _terminalBufferCapability.chunkChars,
-              if (!full && _terminalOutputController.sequenceFor(sessionId) > 0)
-                'resumeFromSeq': _terminalOutputController.sequenceFor(
-                  sessionId,
-                ),
-            },
+            payload: buildTerminalBufferRequestPayload(
+              requestId: requestId,
+              mode: full
+                  ? TerminalBufferRequestMode.historyRestore
+                  : TerminalBufferRequestMode.liveResume,
+              offset: _terminalOutputController.bufferOffset(sessionId),
+              maxChars: maxChars,
+              chunking: _terminalBufferCapability.chunking,
+              chunkChars: _terminalBufferCapability.chunkChars,
+              resumeFromSeq: sequenceFor,
+            ),
           ),
         );
       },
     );
     if (sent && !_terminalBufferLoading && mounted) {
       CoduxLog.info(
-        '[codux-flutter-terminal] request terminal.buffer session=${_sessionId ?? ''} full=$full tail=${full && _terminalBufferCapability.tailSnapshot}',
+        '[codux-flutter-terminal] request terminal.buffer session=${_sessionId ?? ''} full=$full tail=false',
       );
       setState(() => _setTerminalBufferLoading(true));
     }
+  }
+
+  void _requestBufferForCurrentSession({
+    bool force = false,
+    bool preferFull = false,
+  }) {
+    final sessionId = _sessionId;
+    final full =
+        preferFull &&
+        sessionId != null &&
+        !_terminalOutputController.hasCachedOutput(sessionId);
+    _requestBufferIfReady(force: force, full: full);
   }
 
   void _requestBufferPage(String sessionId, int offset) {
@@ -2089,14 +2120,14 @@ class _CoduxHomePageState extends State<CoduxHomePage>
           RelayEnvelope(
             type: 'terminal.buffer',
             sessionId: id,
-            payload: {
-              'requestId': requestId,
-              'tail': false,
-              'offset': offset,
-              'maxChars': maxChars,
-              if (_terminalBufferCapability.chunking)
-                'chunkChars': _terminalBufferCapability.chunkChars,
-            },
+            payload: buildTerminalBufferRequestPayload(
+              requestId: requestId,
+              mode: TerminalBufferRequestMode.historyPage,
+              offset: offset,
+              maxChars: maxChars,
+              chunking: _terminalBufferCapability.chunking,
+              chunkChars: _terminalBufferCapability.chunkChars,
+            ),
           ),
         );
       },
@@ -3670,7 +3701,7 @@ class _CoduxHomePageState extends State<CoduxHomePage>
         if (firstResize) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            _requestBufferIfReady(force: true, full: true);
+            _requestBufferForCurrentSession(force: true, preferFull: true);
             final controller = _nativeTerminalController;
             if (controller != null) {
               _replayCurrentTerminalToNative(
