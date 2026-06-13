@@ -137,6 +137,11 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
       - name: Build Rust FFI for host tests
         shell: bash
         run: |
@@ -146,11 +151,6 @@ jobs:
       - name: Test
         working-directory: apps/mobile
         run: flutter test
-
-      - name: Set up Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
 
       - name: Install Android NDK
         shell: bash
