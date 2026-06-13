@@ -53,12 +53,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          repository: duxweb/codux
+          ref: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', github.event.inputs.version) }}
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
 
       - name: Resolve build metadata
         id: meta
@@ -153,12 +166,15 @@ jobs:
           cp "$profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/${profile_uuid}.mobileprovision"
 
       - name: Install dependencies
+        working-directory: apps/mobile
         run: flutter pub get
 
       - name: Analyze
+        working-directory: apps/mobile
         run: flutter analyze
 
       - name: Test
+        working-directory: apps/mobile
         run: flutter test
 
       - name: Create export options
@@ -191,6 +207,7 @@ jobs:
           PLIST
 
       - name: Build IPA
+        working-directory: apps/mobile
         shell: bash
         run: |
           flutter build ipa --release \
@@ -205,7 +222,7 @@ jobs:
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/ipa-check"
           mkdir -p "$RUNNER_TEMP/ipa-check"
-          unzip -q build/ios/ipa/*.ipa -d "$RUNNER_TEMP/ipa-check"
+          unzip -q apps/mobile/build/ios/ipa/*.ipa -d "$RUNNER_TEMP/ipa-check"
 
           app_path="$(find "$RUNNER_TEMP/ipa-check/Payload" -maxdepth 1 -type d -name '*.app' | head -n 1)"
           test -n "$app_path"
@@ -223,7 +240,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: codux-ios-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.build_number }}
-          path: build/ios/ipa/*.ipa
+          path: apps/mobile/build/ios/ipa/*.ipa
           if-no-files-found: error
 
       - name: Upload to App Store Connect
@@ -239,6 +256,6 @@ jobs:
           printf '%s' "$APP_STORE_CONNECT_API_KEY_P8_BASE64" | base64 -D > "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
           xcrun altool --upload-app \
             --type ios \
-            --file build/ios/ipa/*.ipa \
+            --file apps/mobile/build/ios/ipa/*.ipa \
             --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
             --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"

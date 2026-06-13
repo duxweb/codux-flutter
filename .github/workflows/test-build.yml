@@ -12,6 +12,10 @@ on:
       build_number:
         description: "Build number override"
         required: false
+      source_ref:
+        description: "duxweb/codux ref to build, for example main, v1.8.0, or a commit SHA"
+        required: false
+        default: main
       configuration:
         description: "Flutter build mode"
         required: false
@@ -45,6 +49,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          repository: duxweb/codux
+          ref: ${{ github.event.inputs.source_ref || 'main' }}
+
+      - name: Set build working directory
+        shell: bash
+        run: echo "MOBILE_DIR=apps/mobile" >> "$GITHUB_ENV"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -91,15 +102,44 @@ jobs:
           echo "configuration=${configuration}" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
+        working-directory: apps/mobile
         run: flutter pub get
 
       - name: Analyze
+        working-directory: apps/mobile
         run: flutter analyze
 
       - name: Test
+        working-directory: apps/mobile
         run: flutter test
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install Android NDK
+        shell: bash
+        env:
+          ANDROID_NDK_VERSION: "27.0.12077973"
+        run: |
+          yes | sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Rust FFI for Android
+        shell: bash
+        run: bash "$MOBILE_DIR/plugin/codux_protocol_ffi/scripts/build-android.sh"
+
       - name: Build APK
+        working-directory: apps/mobile
         shell: bash
         run: |
           mkdir -p dist
@@ -123,6 +163,6 @@ jobs:
         with:
           name: codux-mobile-${{ steps.meta.outputs.package_version }}-manual
           path: |
-            dist/*.apk
-            dist/SHA256SUMS.txt
+            apps/mobile/dist/*.apk
+            apps/mobile/dist/SHA256SUMS.txt
           if-no-files-found: error

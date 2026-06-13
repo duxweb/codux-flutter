@@ -45,6 +45,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          repository: duxweb/codux
+          ref: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', github.event.inputs.version) }}
+
+      - name: Set release working directory
+        shell: bash
+        run: echo "MOBILE_DIR=apps/mobile" >> "$GITHUB_ENV"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -79,7 +86,7 @@ jobs:
         shell: bash
         run: |
           notes_path="$RUNNER_TEMP/release-notes.md"
-          bash scripts/release/build-release-notes.sh "${{ steps.meta.outputs.version }}" "$notes_path" CHANGELOG.md CHANGELOG.zh-CN.md
+          bash "$MOBILE_DIR/scripts/release/build-release-notes.sh" "${{ steps.meta.outputs.version }}" "$notes_path" "$MOBILE_DIR/CHANGELOG.md" "$MOBILE_DIR/CHANGELOG.zh-CN.md"
           echo "path=${notes_path}" >> "$GITHUB_OUTPUT"
 
       - name: Validate signing secrets
@@ -108,25 +115,54 @@ jobs:
             echo "[release] Android signing secrets not configured, using local debug signing fallback"
             exit 0
           fi
-          keystore_path="$PWD/android/app/codux-release.jks"
+          keystore_path="$PWD/$MOBILE_DIR/android/app/codux-release.jks"
           printf '%s' "$CODUX_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
           {
             echo "storeFile=app/codux-release.jks"
             echo "storePassword=$CODUX_ANDROID_KEYSTORE_PASSWORD"
             echo "keyAlias=$CODUX_ANDROID_KEY_ALIAS"
             echo "keyPassword=$CODUX_ANDROID_KEY_PASSWORD"
-          } > android/key.properties
+          } > "$MOBILE_DIR/android/key.properties"
 
       - name: Install dependencies
+        working-directory: apps/mobile
         run: flutter pub get
 
       - name: Analyze
+        working-directory: apps/mobile
         run: flutter analyze
 
       - name: Test
+        working-directory: apps/mobile
         run: flutter test
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install Android NDK
+        shell: bash
+        env:
+          ANDROID_NDK_VERSION: "27.0.12077973"
+        run: |
+          yes | sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Rust FFI for Android
+        shell: bash
+        run: bash "$MOBILE_DIR/plugin/codux_protocol_ffi/scripts/build-android.sh"
+
       - name: Build release APK
+        working-directory: apps/mobile
         shell: bash
         run: |
           rm -rf dist
@@ -143,8 +179,8 @@ jobs:
         with:
           name: codux-mobile-${{ steps.meta.outputs.version }}-arm64-v8a-android
           path: |
-            dist/Codux-Mobile-${{ steps.meta.outputs.version }}-arm64-v8a-android.apk
-            dist/SHA256SUMS.txt
+            apps/mobile/dist/Codux-Mobile-${{ steps.meta.outputs.version }}-arm64-v8a-android.apk
+            apps/mobile/dist/SHA256SUMS.txt
           if-no-files-found: error
 
       - name: Upload release assets
@@ -155,5 +191,5 @@ jobs:
           name: Codux Mobile v${{ steps.meta.outputs.version }}
           body_path: ${{ steps.notes.outputs.path }}
           files: |
-            dist/Codux-Mobile-${{ steps.meta.outputs.version }}-arm64-v8a-android.apk
-            dist/SHA256SUMS.txt
+            apps/mobile/dist/Codux-Mobile-${{ steps.meta.outputs.version }}-arm64-v8a-android.apk
+            apps/mobile/dist/SHA256SUMS.txt
