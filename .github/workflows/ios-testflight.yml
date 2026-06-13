@@ -173,6 +173,10 @@ jobs:
         working-directory: apps/mobile
         run: flutter analyze
 
+      - name: Build Rust FFI for host tests
+        shell: bash
+        run: cargo build -p codux-protocol-ffi --release
+
       - name: Test
         working-directory: apps/mobile
         run: flutter test

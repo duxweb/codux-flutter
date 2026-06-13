@@ -132,14 +132,20 @@ jobs:
         working-directory: apps/mobile
         run: flutter analyze
 
-      - name: Test
-        working-directory: apps/mobile
-        run: flutter test
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+
+      - name: Build Rust FFI for host tests
+        shell: bash
+        run: |
+          cargo build -p codux-protocol-ffi --release
+          echo "LD_LIBRARY_PATH=$PWD/target/release:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Test
+        working-directory: apps/mobile
+        run: flutter test
 
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
