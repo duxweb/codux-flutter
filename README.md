@@ -17,7 +17,7 @@ For a mobile release:
 2. Tag and push the monorepo:
 
 ```bash
-cd /Volumes/Web/codux-gpui
+cd <codux-repo>
 git tag v1.8.0
 git push origin main
 git push origin v1.8.0
@@ -26,7 +26,7 @@ git push origin v1.8.0
 3. Push the same tag in this release repository:
 
 ```bash
-cd /Volumes/Web/codux-flutter
+cd <codux-flutter-release-repo>
 git tag v1.8.0
 git push origin v1.8.0
 ```

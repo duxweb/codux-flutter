@@ -17,7 +17,7 @@
 2. 给 monorepo 打 tag 并推送：
 
 ```bash
-cd /Volumes/Web/codux-gpui
+cd <codux-repo>
 git tag v1.8.0
 git push origin main
 git push origin v1.8.0
@@ -26,7 +26,7 @@ git push origin v1.8.0
 3. 在当前发布仓推送同名 tag：
 
 ```bash
-cd /Volumes/Web/codux-flutter
+cd <codux-flutter-release-repo>
 git tag v1.8.0
 git push origin v1.8.0
 ```
