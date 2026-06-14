@@ -161,8 +161,24 @@ jobs:
         env:
           ANDROID_NDK_VERSION: "27.0.12077973"
         run: |
-          yes | sdkmanager "ndk;${ANDROID_NDK_VERSION}"
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+          sdkmanager_bin=""
+          for candidate in \
+            "${ANDROID_HOME:-}/cmdline-tools/latest/bin/sdkmanager" \
+            "${ANDROID_SDK_ROOT:-}/cmdline-tools/latest/bin/sdkmanager" \
+            "${ANDROID_HOME:-}/tools/bin/sdkmanager" \
+            "${ANDROID_SDK_ROOT:-}/tools/bin/sdkmanager"; do
+            if [[ -x "$candidate" ]]; then
+              sdkmanager_bin="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$sdkmanager_bin" ]]; then
+            echo "sdkmanager was not found under ANDROID_HOME=${ANDROID_HOME:-} or ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}" >&2
+            exit 1
+          fi
+          yes | "$sdkmanager_bin" "ndk;${ANDROID_NDK_VERSION}"
+          android_sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+          echo "ANDROID_NDK_HOME=${android_sdk_root}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
