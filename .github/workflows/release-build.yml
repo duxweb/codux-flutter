@@ -176,7 +176,13 @@ jobs:
             echo "sdkmanager was not found under ANDROID_HOME=${ANDROID_HOME:-} or ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}" >&2
             exit 1
           fi
+          set +o pipefail
           yes | "$sdkmanager_bin" "ndk;${ANDROID_NDK_VERSION}"
+          sdkmanager_status="${PIPESTATUS[1]}"
+          set -o pipefail
+          if [[ "$sdkmanager_status" -ne 0 ]]; then
+            exit "$sdkmanager_status"
+          fi
           android_sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
           echo "ANDROID_NDK_HOME=${android_sdk_root}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
 
