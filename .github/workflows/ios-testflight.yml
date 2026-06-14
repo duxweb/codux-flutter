@@ -266,6 +266,7 @@ jobs:
           if [ -f "$ghostty_plist" ]; then
             /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$ghostty_plist"
           fi
+          bash apps/mobile/scripts/release/verify-ios-ffi-symbols.sh apps/mobile/build/ios/ipa/*.ipa
           codesign --verify --deep --strict --verbose=2 "$app_path"
 
       - name: Upload IPA artifact
