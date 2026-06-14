@@ -196,6 +196,19 @@ jobs:
         working-directory: apps/mobile
         run: flutter test
 
+      - name: Build Rust FFI for iOS
+        shell: bash
+        env:
+          PLATFORM_NAME: iphoneos
+          ARCHS: arm64
+          CONFIGURATION: Release
+          ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/zig-global-cache-ios
+          ZIG_LOCAL_CACHE_DIR: ${{ runner.temp }}/zig-local-cache-ios
+        run: |
+          rm -rf "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+          bash apps/mobile/plugin/codux_protocol_ffi/scripts/build-apple.sh
+
       - name: Create export options
         shell: bash
         run: |
