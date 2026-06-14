@@ -15,6 +15,10 @@ on:
       version:
         description: "App version, for example 0.1.6"
         required: true
+      source_ref:
+        description: "duxweb/codux ref to build, for example main, v1.8.0, or a commit SHA"
+        required: false
+        default: main
       build_number:
         description: "Build number override. Defaults to the GitHub run number."
         required: false
@@ -49,13 +53,15 @@ jobs:
       IOS_BUNDLE_ID: com.codux.mobile
       IOS_TEAM_ID: USA572LS4F
       IOS_PROVISIONING_PROFILE_NAME: Codux Mobile App Store
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           repository: duxweb/codux
-          ref: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', github.event.inputs.version) }}
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.source_ref || 'main' }}
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -69,9 +75,12 @@ jobs:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
 
       - name: Set up Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
+        shell: bash
+        run: |
+          brew install zig@0.15
+          zig_path="$(brew --prefix zig@0.15)/bin/zig"
+          echo "ZIG=$zig_path" >> "$GITHUB_ENV"
+          "$zig_path" version
 
       - name: Resolve build metadata
         id: meta
@@ -175,7 +184,13 @@ jobs:
 
       - name: Build Rust FFI for host tests
         shell: bash
-        run: cargo build -p codux-protocol-ffi --release
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/zig-global-cache-host
+          ZIG_LOCAL_CACHE_DIR: ${{ runner.temp }}/zig-local-cache-host
+        run: |
+          rm -rf "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+          cargo build -p codux-protocol-ffi --release
 
       - name: Test
         working-directory: apps/mobile

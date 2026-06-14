@@ -9,7 +9,7 @@
 
 ## 发布模型
 
-当前仓库的 workflows 不再构建本仓库内的旧源码。它们会 checkout `duxweb/codux` 的同名 tag，并从 monorepo 的 `apps/mobile` 构建移动端。
+当前仓库的 workflows 不再构建本仓库内的旧源码。它们会 checkout `duxweb/codux`，并从 monorepo 的 `apps/mobile` 构建移动端。
 
 发布移动端版本：
 
@@ -31,12 +31,12 @@ git tag v1.8.0
 git push origin v1.8.0
 ```
 
-当前仓库的 tag 只作为发布触发器。Android 和 iOS workflows 会构建 `duxweb/codux@v1.8.0`。
+当前仓库的 tag 只作为发布触发器。推送 tag 时会构建 `duxweb/codux` 的同名 tag。如果只是移动端重发或热修复，使用 `workflow_dispatch` 并把 `source_ref` 指向 monorepo 的 branch、tag 或 commit SHA；不要为了重跑移动端打包而移动 monorepo 的正式发布 tag。
 
 ## Workflows
 
-- `.github/workflows/release-build.yml`：从 `duxweb/codux/apps/mobile` 构建签名 Android APK，并发布到当前仓库的 GitHub Release。
-- `.github/workflows/ios-testflight.yml`：从 `duxweb/codux/apps/mobile` 构建 iOS IPA，并上传到 TestFlight。
+- `.github/workflows/release-build.yml`：从 `duxweb/codux/apps/mobile` 构建签名 Android APK，并发布到当前仓库的 GitHub Release。手动运行可指定 `source_ref`。
+- `.github/workflows/ios-testflight.yml`：从 `duxweb/codux/apps/mobile` 构建 iOS IPA，并上传到 TestFlight。手动运行可指定 `source_ref`。
 - `.github/workflows/test-build.yml`：从 `duxweb/codux/apps/mobile` 执行手动 Android 测试构建。通过 `source_ref` 指定 monorepo 的 branch、tag 或 commit SHA。
 
 ## Secrets
