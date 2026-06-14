@@ -148,7 +148,12 @@ jobs:
 
       - name: Build Rust FFI for host tests
         shell: bash
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/zig-global-cache-host
+          ZIG_LOCAL_CACHE_DIR: ${{ runner.temp }}/zig-local-cache-host
         run: |
+          rm -rf "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
           cargo build -p codux-protocol-ffi --release
           echo "LD_LIBRARY_PATH=$PWD/target/release:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
@@ -191,7 +196,13 @@ jobs:
 
       - name: Build Rust FFI for Android
         shell: bash
-        run: bash "$MOBILE_DIR/plugin/codux_protocol_ffi/scripts/build-android.sh"
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/zig-global-cache-android
+          ZIG_LOCAL_CACHE_DIR: ${{ runner.temp }}/zig-local-cache-android
+        run: |
+          rm -rf "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+          bash "$MOBILE_DIR/plugin/codux_protocol_ffi/scripts/build-android.sh"
 
       - name: Build release APK
         working-directory: apps/mobile
