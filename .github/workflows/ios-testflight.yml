@@ -16,7 +16,7 @@ on:
         description: "App version, for example 0.1.6"
         required: true
       source_ref:
-        description: "duxweb/codux ref to build, for example main, v1.8.0, or a commit SHA"
+        description: "duxweb/codux ref to build, for example main, v1.8.1, or a commit SHA"
         required: false
         default: main
       build_number:

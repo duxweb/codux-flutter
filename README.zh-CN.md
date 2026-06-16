@@ -18,17 +18,17 @@
 
 ```bash
 cd <codux-repo>
-git tag v1.8.0
+git tag v1.8.1
 git push origin main
-git push origin v1.8.0
+git push origin v1.8.1
 ```
 
 3. 在当前发布仓推送同名 tag：
 
 ```bash
 cd <codux-flutter-release-repo>
-git tag v1.8.0
-git push origin v1.8.0
+git tag v1.8.1
+git push origin v1.8.1
 ```
 
 当前仓库的 tag 只作为发布触发器。推送 tag 时会构建 `duxweb/codux` 的同名 tag。如果只是移动端重发或热修复，使用 `workflow_dispatch` 并把 `source_ref` 指向 monorepo 的 branch、tag 或 commit SHA；不要为了重跑移动端打包而移动 monorepo 的正式发布 tag。

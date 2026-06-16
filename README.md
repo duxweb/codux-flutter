@@ -18,17 +18,17 @@ For a mobile release:
 
 ```bash
 cd <codux-repo>
-git tag v1.8.0
+git tag v1.8.1
 git push origin main
-git push origin v1.8.0
+git push origin v1.8.1
 ```
 
 3. Push the same tag in this release repository:
 
 ```bash
 cd <codux-flutter-release-repo>
-git tag v1.8.0
-git push origin v1.8.0
+git tag v1.8.1
+git push origin v1.8.1
 ```
 
 The tag in this repository is only the release trigger. A tag push builds the matching `duxweb/codux` tag. For a mobile-only rebuild or hotfix, use `workflow_dispatch` and set `source_ref` to the monorepo branch, tag, or commit SHA; do not move the monorepo release tag just to rerun mobile packaging.
