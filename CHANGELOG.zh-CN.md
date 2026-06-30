@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [2.0.0-beta.4] - 2026-06-30
+
+### 调整
+
+- Flutter 移动端发布同步 Codux 2.0.0-beta.4。
+- 新增无版本号的 `codux-android.apk` release 资源别名，用于稳定的 latest 下载链接。
+
 ## [1.8.1] - 2026-06-16
 
 ### 调整

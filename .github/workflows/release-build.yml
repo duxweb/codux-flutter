@@ -216,6 +216,8 @@ jobs:
             --dart-define "CODUX_LOG_LEVEL=${{ github.event.inputs.log_level || 'warn' }}"
           cp build/app/outputs/flutter-apk/app-release.apk "dist/Codux-Mobile-${{ steps.meta.outputs.version }}-arm64-v8a-android.apk"
           (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+          # Version-less alias so the website can link releases/latest/download/codux-android.apk
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/codux-android.apk"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -235,4 +237,5 @@ jobs:
           body_path: ${{ steps.notes.outputs.path }}
           files: |
             apps/mobile/dist/Codux-Mobile-${{ steps.meta.outputs.version }}-arm64-v8a-android.apk
+            apps/mobile/dist/codux-android.apk
             apps/mobile/dist/SHA256SUMS.txt

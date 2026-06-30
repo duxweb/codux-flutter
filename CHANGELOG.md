@@ -4,6 +4,13 @@ Important changes to this project are documented here.
 
 ## [Unreleased]
 
+## [2.0.0-beta.4] - 2026-06-30
+
+### Changed
+
+- Aligned the Flutter mobile release with Codux 2.0.0-beta.4.
+- Added a version-less `codux-android.apk` release asset alias for stable latest-download links.
+
 ## [1.8.1] - 2026-06-16
 
 ### Changed
