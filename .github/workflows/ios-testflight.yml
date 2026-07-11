@@ -99,6 +99,17 @@ jobs:
             echo "iOS build name is missing" >&2
             exit 1
           fi
+          if [[ "${version}" == *-* ]]; then
+            IFS='.' read -r major minor patch <<< "${build_name}"
+            if [[ -z "${major}" || -z "${minor}" || -z "${patch}" ]] \
+              || [[ ! "${major}" =~ ^[0-9]+$ ]] \
+              || [[ ! "${minor}" =~ ^[0-9]+$ ]] \
+              || [[ ! "${patch}" =~ ^[0-9]+$ ]]; then
+              echo "iOS prerelease version must use numeric major.minor.patch: ${version}" >&2
+              exit 1
+            fi
+            build_name="${major}.${minor}.$((10#${patch} + 1))"
+          fi
 
           build_number="${{ github.event.inputs.build_number }}"
           if [[ -z "${build_number}" ]]; then
